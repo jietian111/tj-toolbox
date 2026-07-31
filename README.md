@@ -19,7 +19,7 @@
 
 #### 下载并运行
 
-从仓库的 [Releases](https://github.com/jietian111/codex-tools-and-skills/releases) 页面下载 `DesktopOrganizer.exe`，然后双击运行。Windows 首次运行下载的程序时可能显示安全提醒；请核对发布来源和 Release 中提供的 SHA-256 后再运行。
+从仓库的 [Releases](https://github.com/jietian111/tj-toolbox/releases) 页面下载 `DesktopOrganizer.exe`，然后双击运行。Windows 首次运行下载的程序时可能显示安全提醒；请核对发布来源和 Release 中提供的 SHA-256 后再运行。
 
 #### 排列规则
 
@@ -65,7 +65,7 @@ dist\DesktopOrganizer.exe
 ```text
 请使用 skill-installer，把下面 GitHub 目录中的 project-handoff Skill 安装到我的 Codex 默认 Skills 目录，并在安装后验证 SKILL.md 和 agents/openai.yaml。如果目标目录已经存在，请先检查并告诉我，不要直接覆盖。请直接执行安装，不要只提供操作步骤：
 
-https://github.com/jietian111/codex-tools-and-skills/tree/main/skills/project-handoff
+https://github.com/jietian111/tj-toolbox/tree/main/skills/project-handoff
 ```
 
 安装完成后，在下一轮对话中即可使用。该仓库是公开仓库，不需要登录 GitHub 账号。
@@ -73,9 +73,9 @@ https://github.com/jietian111/codex-tools-and-skills/tree/main/skills/project-ha
 如果希望手动安装，请先安装 [Git](https://git-scm.com/)，然后在 PowerShell 中运行：
 
 ```powershell
-git clone https://github.com/jietian111/codex-tools-and-skills.git
+git clone https://github.com/jietian111/tj-toolbox.git
 
-$skillSource = Join-Path (Get-Location) 'codex-tools-and-skills\skills\project-handoff'
+$skillSource = Join-Path (Get-Location) 'tj-toolbox\skills\project-handoff'
 $skillDestination = Join-Path $env:USERPROFILE '.codex\skills\project-handoff'
 New-Item -ItemType Directory -Force -Path $skillDestination | Out-Null
 Copy-Item -Path (Join-Path $skillSource '*') -Destination $skillDestination -Recurse -Force
@@ -94,7 +94,7 @@ Copy-Item -Path (Join-Path $skillSource '*') -Destination $skillDestination -Rec
 ## 目录结构
 
 ```text
-codex-tools-and-skills/
+tj-toolbox/
 ├─ assets/                         # 桌面整理工具的图标等资源
 ├─ skills/
 │  └─ project-handoff/
