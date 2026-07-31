@@ -1,0 +1,9 @@
+# Build outputs
+*.exe
+*.pdb
+*.obj
+dist/
+
+# Diagnostic and editor files
+desktop-organizer-diagnostic.txt
+.vs/
