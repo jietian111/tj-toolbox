@@ -1,6 +1,6 @@
 ---
 name: organize-obsidian-inbox
-description: Configure a default Obsidian vault, then safely turn web pages, attached files, or single/batched inbox materials into structured Markdown notes with duplicate detection, multi-format routing, source snapshots, processing records, confidence-gated automatic processing, and verified archiving. Use from any Codex task when the user says 整理了, asks to set or change the default knowledge-base path, sends attachments or URLs for Obsidian, says 整理收件箱, 整理这个文件, 整理这个网页, 确认整理, 确认整理并归档, 批量整理, or asks to turn Markdown/TXT/PDF/DOCX/PPT/PPTX/images/web pages into Obsidian notes.
+description: Configure a default Obsidian vault, then safely turn web pages, attached files, or single/batched inbox materials into structured Markdown notes with duplicate detection, multi-format routing, source snapshots, processing records, confidence-gated automatic processing, adjacent-attachment matching, and verified archiving. Use from any Codex task when the user says 整理了 after sending attachments or URLs, asks to set or change the default knowledge-base path, sends attachments or URLs for Obsidian, says 整理收件箱, 整理这个文件, 整理这个网页, 确认整理, 确认整理并归档, 批量整理, or asks to turn Markdown/TXT/PDF/DOCX/PPT/PPTX/images/web pages into Obsidian notes.
 ---
 
 # Organize Obsidian Inbox
@@ -35,16 +35,17 @@ Never hardcode the publisher's vault path or store user paths in this Git reposi
 
 1. Use attachments in the current user message as explicit targets.
 2. Use URLs in the current user message as explicit targets.
-3. Include both when both are present.
-4. When there is no current attachment, URL, or named file, ask what to organize. Do not scan the whole inbox silently.
-5. `整理了` authorizes read-only analysis followed by automatic creation and verified archiving when every automatic-eligibility condition passes.
-6. `整理了` never authorizes overwriting, merging, permanent deletion, bypassing access controls, or guessing uncertain content.
+3. Some clients render or serialize a single combined send as adjacent user events. If the current `整理了` event has no attachment, URL, or named file, inspect only the immediately preceding user event in the same task. Use its attachment or URL automatically only when there is exactly one candidate, it has not already been processed in the task, and no intervening user request changes the subject.
+4. Include directly present attachments and URLs together. Never combine an adjacent fallback candidate with other targets unless the user clearly requests that batch.
+5. If the adjacent event has multiple candidates, is stale, was already processed, or is separated by another request, list the ambiguity and ask what to organize. Do not guess, search older task history broadly, or scan the whole inbox silently.
+6. `整理了` authorizes read-only analysis followed by automatic creation and verified archiving when every automatic-eligibility condition passes.
+7. `整理了` never authorizes overwriting, merging, permanent deletion, bypassing access controls, or guessing uncertain content.
 
 ## Determine automatic eligibility
 
 Automatically create the formal note, update its index and processing record, and archive the verified source only when all conditions pass:
 
-1. The current request identifies the exact attachment, URL, or named inbox file.
+1. The current request identifies the exact attachment, URL, or named inbox file, either directly or through the single immediately adjacent fallback defined above.
 2. The source format is supported and its meaningful content was extracted completely enough to summarize faithfully.
 3. The title, category, tags, formal-note path, and archive or snapshot path are unambiguous.
 4. Duplicate detection shows a new source. A matching URL with changed content, matching filename with changed hash, or an ambiguous prior record requires review.
@@ -65,7 +66,7 @@ If any condition fails, show the source, proposed title, category, targets, tags
 
 ## Accept a directly attached file
 
-1. Treat only user-attached files as in scope, even when they are outside the vault.
+1. Treat only current user-attached files or the single immediately adjacent fallback as in scope, even when they are outside the vault.
 2. Read and hash each attachment in place. Never alter the external attachment.
 3. Determine an inbox copy under `00-待整理/<original-name>` and a formal-note target.
 4. If the inbox has the same filename, compare hashes. Reuse identical content; for different content, propose a non-conflicting name and wait. Never overwrite.
