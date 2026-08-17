@@ -1,0 +1,4 @@
+interface:
+  display_name: "Obsidian 收件箱整理"
+  short_description: "首次设置默认知识库后自动整理网页、附件和收件箱资料"
+  default_prompt: "使用 $organize-obsidian-inbox 开始首次设置；如果已经设置，请告诉我最短用法并准备整理资料。"
