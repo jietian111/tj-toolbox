@@ -91,15 +91,68 @@ Copy-Item -Path (Join-Path $skillSource '*') -Destination $skillDestination -Rec
 
 也可以使用 `$project-handoff` 明确触发。该 Skill 还会在项目对话过长、准备暂停、需要切换对话或存在上下文遗失风险时建议生成交接文档。
 
+### Codex Skill：organize-obsidian-inbox
+
+[`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) 用于把网页、聊天附件以及 Obsidian 收件箱中的 Markdown、TXT、PDF、DOCX、PPT/PPTX 和图片整理成结构化笔记。资料完整、分类明确且无冲突时会自动生成、更新索引和处理记录，并在验证后归档；内容不完整、OCR 不清、疑似重复或路径冲突时才请求确认。
+
+#### 安装
+
+推荐把下面整段内容发送给 Codex，让它使用官方 `skill-installer` 安装并验证：
+
+```text
+请使用 skill-installer，把下面 GitHub 目录中的 organize-obsidian-inbox Skill 安装到我的 Codex 默认 Skills 目录，并在安装后验证 SKILL.md、agents/openai.yaml 和 scripts 目录。如果目标目录已经存在，请先检查并告诉我，不要直接覆盖。请直接执行安装，不要只提供操作步骤：
+
+https://github.com/jietian111/tj-toolbox/tree/main/skills/organize-obsidian-inbox
+```
+
+安装完成后，请打开一个新的 Codex 对话，使 Skill 列表重新加载。
+
+#### 首次设置
+
+Codex Skill 目前没有“安装完成后立即自动弹窗”的安装钩子。因此，本 Skill 会在首次调用时显示简短用法，并要求设置默认 Obsidian Vault。
+
+首次调用：
+
+```text
+使用 $organize-obsidian-inbox，开始设置默认知识库
+```
+
+按照提示提供一个已经存在、且包含 `.obsidian` 的知识库绝对路径。Skill 会把默认路径保存到用户自己的 Codex 配置目录，不会把个人路径写回本仓库。首次设置还会以“只创建缺失项、不覆盖已有内容”的方式准备收件箱、分类、归档、模板和处理记录。
+
+当前版本以 Windows Codex 为主要支持环境；在 macOS 或 Linux 使用时，需要系统能够调用 PowerShell 7。
+
+#### 使用方式
+
+设置完成后，可以在同一台电脑的任意 Codex 任务中附上文件或粘贴网址，然后只说：
+
+```text
+整理了
+```
+
+其他常用口令：
+
+```text
+先预览，整理了
+整理收件箱
+查看默认知识库
+更换默认知识库路径
+```
+
+默认配置文件位于用户配置目录：Windows 为 `%USERPROFILE%\.codex\organize-obsidian-inbox\settings.json`，其他系统使用用户主目录下的同等位置。配置文件不包含账号、令牌或其他凭据。
+
 ## 目录结构
 
 ```text
 tj-toolbox/
 ├─ assets/                         # 桌面整理工具的图标等资源
 ├─ skills/
-│  └─ project-handoff/
-│     ├─ agents/openai.yaml        # Codex 界面元数据
-│     └─ SKILL.md                  # Skill 触发条件与工作流程
+│  ├─ project-handoff/
+│  │  ├─ agents/openai.yaml        # Codex 界面元数据
+│  │  └─ SKILL.md                  # Skill 触发条件与工作流程
+│  └─ organize-obsidian-inbox/
+│     ├─ agents/openai.yaml         # 首次设置入口和界面元数据
+│     ├─ scripts/                   # 配置、扫描和 PPTX 提取脚本
+│     └─ SKILL.md                   # 默认 Vault 与自动整理工作流
 ├─ OrganizeDesktop.cs              # 一键整理桌面源码
 ├─ build.ps1                       # 自动查找编译器并构建 EXE
 ├─ .gitignore
