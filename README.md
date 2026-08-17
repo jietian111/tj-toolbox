@@ -1,6 +1,24 @@
-# 个人工具与 Codex Skills
+# TJ Toolbox｜Windows 工具与 Codex Skills
 
-这个仓库用于集中保存个人 Windows 工具、Codex Skills 和小型实验项目。不同内容按目录分类，便于备份、维护和在其他电脑上重新使用。
+这个仓库集中提供可以直接安装或运行的 Windows 小工具与 Codex Skills，主要解决 Obsidian 知识整理、长期项目交接和桌面图标整理等实际需求。
+
+## 快速入口
+
+| 工具 | 用途 | 最短用法 |
+| --- | --- | --- |
+| [`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) | 自动把附件、网页和收件箱资料整理成 Obsidian 笔记；确定项直接归档，存疑项才询问 | 附上资料并说 `存入 Obsidian` |
+| [`project-handoff`](skills/project-handoff/) | 生成或更新 `HANDOFF.md`，让新任务在没有旧聊天记录时继续长期项目 | `使用 project-handoff，生成 HANDOFF.md` |
+| [一键整理桌面](#windows-工具一键整理桌面) | 按类型重新排列 Windows 桌面图标，不移动或删除文件 | 从 [Releases](https://github.com/jietian111/tj-toolbox/releases) 下载运行 |
+
+### 推荐：把资料自动存入 Obsidian
+
+安装 [`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) 并完成一次默认知识库设置后，可以在同一台电脑的任意 Codex 任务中使用：
+
+```text
+存入 Obsidian
+```
+
+Skill 会读取同一条消息或紧邻的唯一附件/网址。资料完整、分类明确且没有冲突时，它会自动创建结构化笔记、更新索引和处理记录，并在验证后归档；只有内容不清、疑似重复或存在覆盖风险时才会询问。原始外部附件不会被修改。
 
 ## 仓库内容
 
