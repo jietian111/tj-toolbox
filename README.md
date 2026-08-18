@@ -6,7 +6,7 @@
 
 | 工具 | 用途 | 最短用法 |
 | --- | --- | --- |
-| [`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) | 自动把附件、网页和收件箱资料整理成 Obsidian 笔记；确定项直接归档，存疑项才询问 | 附上资料并说 `存入 Obsidian` |
+| [`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) | 把当前对话、附件、网页和收件箱资料整理成 Obsidian 笔记 | 附上资料或讨论完成后说 `存入 Obsidian` |
 | [`project-handoff`](skills/project-handoff/) | 生成或更新 `HANDOFF.md`，让新任务在没有旧聊天记录时继续长期项目 | `使用 project-handoff，生成 HANDOFF.md` |
 | [一键整理桌面](#windows-工具一键整理桌面) | 按类型重新排列 Windows 桌面图标，不移动或删除文件 | 从 [Releases](https://github.com/jietian111/tj-toolbox/releases) 下载运行 |
 
@@ -18,7 +18,7 @@
 存入 Obsidian
 ```
 
-Skill 会读取同一条消息或紧邻的唯一附件/网址。资料完整、分类明确且没有冲突时，它会自动创建结构化笔记、更新索引和处理记录，并在验证后归档；只有内容不清、疑似重复或存在覆盖风险时才会询问。原始外部附件不会被修改。
+Skill 会优先读取同一条消息或紧邻的唯一附件/网址。资料完整、分类明确且没有冲突时，它会自动创建结构化笔记、更新索引和处理记录，并在验证后归档。如果独立发送该口令且没有资料目标，Skill 会先预览当前任务中可访问的对话摘要，确认后再保存知识笔记和对话快照。原始外部附件不会被修改。
 
 ## 仓库内容
 
@@ -111,7 +111,7 @@ Copy-Item -Path (Join-Path $skillSource '*') -Destination $skillDestination -Rec
 
 ### Codex Skill：organize-obsidian-inbox
 
-[`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) 用于把网页、聊天附件以及 Obsidian 收件箱中的 Markdown、TXT、PDF、DOCX、PPT/PPTX 和图片整理成结构化笔记。资料完整、分类明确且无冲突时会自动生成、更新索引和处理记录，并在验证后归档；内容不完整、OCR 不清、疑似重复或路径冲突时才请求确认。
+[`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) 用于把当前任务对话、网页、聊天附件以及 Obsidian 收件箱中的 Markdown、TXT、PDF、DOCX、PPT/PPTX 和图片整理成结构化笔记。资料完整、分类明确且无冲突时会自动生成、更新索引和处理记录，并在验证后归档；独立口令触发的对话整理始终先预览，确认后才写入。
 
 #### 安装
 
@@ -149,10 +149,16 @@ Codex Skill 目前没有“安装完成后立即自动弹窗”的安装钩子�
 
 如果 Codex 客户端把一次发送中的附件和“存入 Obsidian”显示成两个相邻气泡，Skill 仍会匹配紧邻的唯一附件或网址。若有多个候选、来源已处理、被其他请求隔开或指代不清，Skill 会先询问，不会向前广泛猜测或扫描整个收件箱。旧口令“整理了”仍可作为兼容别名，但不再是推荐入口。
 
+如果当前消息和紧邻消息都没有附件、网址或指定文件，独立发送“存入 Obsidian”会进入当前任务对话模式。Skill 只使用此刻实际可访问的用户与 Codex 消息，先展示标题、分类、标签、摘要、结构、正式笔记路径和对话快照路径；用户回复“确认整理并归档”后才写入。快照保存在 `98-原始资料/<YYYY-MM>/对话`。隐藏指令、内部推理和工具日志不会保存；早期消息已经压缩或不可访问时会明确提示不完整。
+
+无空格的“存入obsidian”以及仅有英文字母大小写差异的形式与“存入 Obsidian”等价。
+
 其他常用口令：
 
 ```text
 先预览，存入 Obsidian
+把当前对话存入 Obsidian
+确认整理并归档
 整理收件箱
 查看默认知识库
 更换默认知识库路径

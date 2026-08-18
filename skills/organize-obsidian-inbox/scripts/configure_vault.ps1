@@ -118,6 +118,7 @@ tags:
 7. 失败、存疑或未验证成功的资料保持原位。
 8. 验证成功的原资料归档到 `98-原始资料/<YYYY-MM>/<类型>`。
 9. 用户说“先预览”时只展示方案，不写入或移动。
+10. 独立发送“存入 Obsidian”且没有资料目标时，先预览当前任务中可访问的对话；确认后将对话快照保存到 `98-原始资料/<YYYY-MM>/对话`。
 '@
     Ensure-TextFile -Path (Join-Path $vaultRoot '99-系统\Codex整理规则.md') -Content $rules
 
@@ -231,6 +232,57 @@ status: 已整理
 {{OCR、图表、数字或上下文疑问}}
 '@
     Ensure-TextFile -Path (Join-Path $vaultRoot '99-系统\模板\PPT内容笔记模板.md') -Content $pptTemplate
+
+    $conversationTemplate = @'
+---
+title: "{{对话主题}}"
+created: "{{日期}}"
+processed: "{{处理日期}}"
+category: "{{分类}}"
+tags:
+  - 对话笔记
+  - "{{主题标签}}"
+source: "{{对话快照链接}}"
+source_hash: "{{快照SHA-256}}"
+conversation_scope: "{{可访问对话范围}}"
+conversation_complete: "{{完整性状态}}"
+processed_by: organize-obsidian-inbox
+status: 已整理
+---
+
+# {{对话主题}}
+
+## 摘要
+
+{{本次对话解决的问题、核心知识和结果}}
+
+## 背景与目标
+
+{{用户的问题、资料背景和目标}}
+
+## 核心知识
+
+{{按主题整理事实、解释、方法和例子}}
+
+## 已确认决定
+
+- {{明确确认的决定}}
+
+## 可执行步骤
+
+1. {{可复用的步骤}}
+
+## 待确认问题
+
+- {{没有则写“无”}}
+
+## 对话范围与限制
+
+- 范围：{{实际纳入的可访问消息范围}}
+- 完整性：{{是否存在压缩、截断或不可访问内容}}
+- 排除内容：系统或开发者指令、隐藏上下文、内部推理、工具调用与原始日志
+'@
+    Ensure-TextFile -Path (Join-Path $vaultRoot '99-系统\模板\对话知识笔记模板.md') -Content $conversationTemplate
 }
 
 Ensure-Directory -Path $ConfigRoot
