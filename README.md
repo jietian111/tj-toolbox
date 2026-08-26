@@ -91,6 +91,8 @@ dist\DesktopOrganizer.exe
 
 [`image-prompt-manager`](skills/image-prompt-manager/) 使用本地 SQLite 保存个人图片处理 Prompt、不可变版本、实际执行 Run、结果引用和反馈。附图后说“处理一下这个图片”，Skill 会先分析当前图片并展示带编号的个人库候选或临时方案；只有用户选定后才调用图片工具和记录使用，浏览与推荐本身不会增加使用次数。
 
+安装后的个人库默认是空的，这是正常状态：仓库不会把维护者或其他用户的 Prompt、偏好与使用记录自动写入你的数据库。这样升级 Skill 时不会覆盖个人数据，新用户的推荐统计也只来自自己的真实选择。完整的空库说明、首次使用流程和收藏方式见 [`image-prompt-manager/README.md`](skills/image-prompt-manager/README.md)。
+
 #### 安装
 
 把下面整段内容发送给 Codex，即可使用官方 `skill-installer` 安装并验证：
@@ -106,6 +108,27 @@ https://github.com/jietian111/tj-toolbox/tree/main/skills/image-prompt-manager
 ```text
 处理一下这个图片
 ```
+
+首次调用时，如果个人库仍为空，Codex 会说明当前没有正式方案，并提醒你怎样收集第一条 Prompt。最直接的方法是粘贴完整内容：
+
+```text
+把下面这段提示词收进图片库：
+<粘贴完整提示词>
+```
+
+也可以上传包含 Prompt 的清晰截图并说：
+
+```text
+识别这张截图里的图片处理提示词，先核对完整文字，再收进图片库。
+```
+
+或者在一次图片处理效果满意后说：
+
+```text
+把刚才这个效果收进图片库。
+```
+
+空库时附图说“处理一下这个图片”，Codex 可以先生成一个临时 `Txxx` 方案作为编号选项，但仍会停下来等你选择，不会因为库为空就擅自执行。
 
 Skill 的源码和可安装内容位于仓库；变化中的个人数据库保存在用户主目录的 `.image-prompt-manager` 中，不会写入 Skill 目录或提交到 GitHub。所有确定性读写均通过 `scripts/library.py` 完成，不需要云端数据库。
 
@@ -253,6 +276,7 @@ tj-toolbox/
 │  │  ├─ scripts/                  # 桌面启动器安装脚本
 │  │  └─ SKILL.md                  # 代理端口收集、生成与验收流程
 │  ├─ image-prompt-manager/
+│  │  ├─ README.md                 # 空库说明、首次使用与 Prompt 收集指南
 │  │  ├─ agents/openai.yaml        # Codex 界面元数据
 │  │  ├─ references/               # 推荐、版本、Run 与数据库规则
 │  │  ├─ scripts/                  # SQLite Prompt 库 CLI

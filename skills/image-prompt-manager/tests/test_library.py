@@ -323,6 +323,17 @@ class PromptLibraryTests(unittest.TestCase):
         self.assertEqual(0, status["total_negative_count"])
         self.assertTrue(status["database"].endswith("prompts.db"))
 
+    def test_empty_status_includes_actionable_onboarding(self) -> None:
+        empty = self.library.stats()
+        self.assertTrue(empty["library_empty"])
+        self.assertTrue(empty["onboarding"]["required"])
+        self.assertIn("收进图片库", " ".join(empty["onboarding"]["examples"]))
+
+        self.library.add(self.sample())
+        populated = self.library.stats()
+        self.assertFalse(populated["library_empty"])
+        self.assertIsNone(populated["onboarding"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

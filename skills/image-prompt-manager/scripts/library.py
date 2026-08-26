@@ -26,6 +26,15 @@ SCHEMA_VERSION = 3
 DEFAULT_SETTINGS = {"backup_keep": 25, "duplicate_threshold": 0.85}
 HIGH_MATCH_THRESHOLD = 80.0
 MIN_MATCH_THRESHOLD = 65.0
+EMPTY_LIBRARY_ONBOARDING = {
+    "required": True,
+    "message": "图片提示词库目前为空。请先收藏你自己的图片处理提示词，或在一次满意的处理后保存刚才的效果。",
+    "examples": [
+        "把下面这段提示词收进图片库：<粘贴完整提示词>",
+        "识别这张截图里的图片处理提示词，先核对完整文字，再收进图片库。",
+        "把刚才这个效果收进图片库。",
+    ],
+}
 JSON_FIELDS = ("tags", "suitable_for", "avoid_when", "strengths")
 EDITABLE_FIELDS = (
     "name", "category", "subcategory", "tags", "suitable_for", "avoid_when",
@@ -669,6 +678,8 @@ class PromptLibrary:
         aggregate_warnings = sum(1 for item in self.stats_check()["checks"] if not item["ok"])
         return {"status": "ok", "database_status": integrity, "database": str(self.db_path),
                 "total": total, "active": active, "disabled": total - active,
+                "library_empty": total == 0,
+                "onboarding": EMPTY_LIBRARY_ONBOARDING if total == 0 else None,
                 "total_use_count": totals[0], "total_positive_count": totals[1],
                 "total_negative_count": totals[2], "categories": categories,
                 "schema_version": SCHEMA_VERSION, "prompt_versions": versions, "runs": runs,
