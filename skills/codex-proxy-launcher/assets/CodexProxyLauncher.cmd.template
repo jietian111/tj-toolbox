@@ -1,0 +1,70 @@
+@echo off
+setlocal EnableExtensions
+
+set "PROXY_HOST=127.0.0.1"
+set "PROXY_PORT=__PROXY_PORT__"
+set "PROXY_URL=http://%PROXY_HOST%:%PROXY_PORT%"
+set "CODEX_RESOLVER=%~dp0Resolve-CodexApp.ps1"
+set "CODEX_SHORTCUT=__SHORTCUT_PATH__"
+set "CODEX_RUNTIME=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies"
+set "CODEX_TOOLS=%USERPROFILE%\.codex\tools"
+
+rem Keep common Codex child-process tools discoverable.
+set "ORIGINAL_PATH=%PATH%"
+set "PATH="
+set "Path=%ORIGINAL_PATH%"
+if exist "%CODEX_TOOLS%" set "Path=%CODEX_TOOLS%;%Path%"
+for /d %%R in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\BurntSushi.ripgrep.MSVC_Microsoft.Winget.Source_8wekyb3d8bbwe\ripgrep-*") do if exist "%%~fR\rg.exe" set "Path=%%~fR;%Path%"
+if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\rg.exe" set "Path=%LOCALAPPDATA%\Microsoft\WinGet\Links;%Path%"
+if exist "C:\Program Files\nodejs\npm.cmd" set "Path=C:\Program Files\nodejs;%Path%"
+if not exist "C:\Program Files\nodejs\node.exe" if exist "%CODEX_RUNTIME%\node\bin\node.exe" set "Path=%CODEX_RUNTIME%\node\bin;%Path%"
+for /d %%G in ("%LOCALAPPDATA%\GitHubDesktop\app-*") do if exist "%%~fG\resources\app\git\mingw64\bin\git.exe" set "Path=%%~fG\resources\app\git\mingw64\bin;%Path%"
+
+rem Normalize case-insensitive proxy variables before setting canonical names.
+for %%V in (HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy) do set "%%V="
+set "HTTP_PROXY=%PROXY_URL%"
+set "HTTPS_PROXY=%PROXY_URL%"
+set "ALL_PROXY=%PROXY_URL%"
+set "NO_PROXY=localhost,127.0.0.1,::1"
+
+set "CODEX_EXE="
+for /f "delims=" %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%CODEX_RESOLVER%"') do set "CODEX_EXE=%%E"
+
+if not defined CODEX_EXE (
+  powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('Could not find the Codex or ChatGPT app. Install or open it once, then run this launcher again.','Codex Proxy Launcher') | Out-Null"
+  exit /b 1
+)
+
+if exist "%CODEX_SHORTCUT%" (
+  powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "$shortcut=$env:CODEX_SHORTCUT; $icon=$env:CODEX_EXE + ',0'; $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($shortcut); if($s.IconLocation -ne $icon){$s.IconLocation=$icon; $s.Save()}"
+)
+
+if /i "%~1"=="--check" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$c=New-Object Net.Sockets.TcpClient; try{$r=$c.BeginConnect($env:PROXY_HOST,[int]$env:PROXY_PORT,$null,$null); if($r.AsyncWaitHandle.WaitOne(800)){$c.EndConnect($r); 'ProxyPort=Open'}else{'ProxyPort=Closed'}}catch{'ProxyPort=Closed'}finally{$c.Close()}"
+  echo CODEX_EXE=%CODEX_EXE%
+  echo PROXY_URL=%PROXY_URL%
+  echo LAUNCHER=%~f0
+  echo SHORTCUT=%CODEX_SHORTCUT%
+  exit /b 0
+)
+
+if /i "%~1"=="--env-check" (
+  echo CODEX_EXE=%CODEX_EXE%
+  echo PROXY_URL=%PROXY_URL%
+  echo.
+  where git 2>nul
+  git --version 2>nul
+  echo.
+  where node 2>nul
+  node --version 2>nul
+  echo.
+  where npm 2>nul
+  npm --version 2>nul
+  echo.
+  where rg 2>nul
+  rg --version 2>nul
+  exit /b 0
+)
+
+start "" "%CODEX_EXE%" --lang=zh-CN --proxy-server="%PROXY_URL%" --proxy-bypass-list="localhost;127.0.0.1;::1"
+exit /b 0

@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | [`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) | 把当前对话、附件、网页和收件箱资料整理成 Obsidian 笔记 | 附上资料或讨论完成后说 `存入 Obsidian` |
 | [`project-handoff`](skills/project-handoff/) | 生成或更新 `HANDOFF.md`，让新任务在没有旧聊天记录时继续长期项目 | `使用 project-handoff，生成 HANDOFF.md` |
+| [`codex-proxy-launcher`](skills/codex-proxy-launcher/) | 为 Windows 生成强制使用本地 HTTP 代理、可适配 App 更新的 Codex 桌面快捷方式 | `使用 codex-proxy-launcher，帮我生成代理启动器` |
 | [一键整理桌面](#windows-工具一键整理桌面) | 按类型重新排列 Windows 桌面图标，不移动或删除文件 | 从 [Releases](https://github.com/jietian111/tj-toolbox/releases) 下载运行 |
 
 ### 推荐：把资料自动存入 Obsidian
@@ -71,6 +72,44 @@ dist\DesktopOrganizer.exe
 ```powershell
 .\build.ps1 -OutputDirectory 'D:\BuildOutput'
 ```
+
+### Codex Skill：codex-proxy-launcher
+
+[`codex-proxy-launcher`](skills/codex-proxy-launcher/) 用于解决 Windows Codex/ChatGPT App 因网络环境反复显示 `reconnecting` 的问题。Skill 会先询问本地 HTTP 代理端口，再在桌面创建完整的代理启动器和 `Codex.lnk` 快捷方式。
+
+#### 安装
+
+把下面整段内容发送给 Codex，即可使用官方 `skill-installer` 安装并验证：
+
+```text
+请使用 skill-installer，把下面 GitHub 目录中的 codex-proxy-launcher Skill 安装到我的 Codex 默认 Skills 目录，并在安装后验证 SKILL.md、agents/openai.yaml、assets 和 scripts 目录。如果目标目录已经存在，请先检查并告诉我，不要直接覆盖。请直接执行安装，不要只提供操作步骤：
+
+https://github.com/jietian111/tj-toolbox/tree/main/skills/codex-proxy-launcher
+```
+
+安装完成后打开一个新的 Codex 对话，然后发送：
+
+```text
+使用 codex-proxy-launcher，帮我在桌面生成 Codex 代理启动器。
+```
+
+Codex 会询问本地 HTTP 代理端口，只需回复数字，例如 `7897`。默认代理地址为 `http://127.0.0.1:<端口>`。
+
+#### 生成内容与功能
+
+Skill 默认生成：
+
+```text
+桌面\Codex Proxy Launcher\CodexProxyLauncher.cmd
+桌面\Codex Proxy Launcher\Resolve-CodexApp.ps1
+桌面\Codex.lnk
+```
+
+启动器会设置 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`，并向 Codex/ChatGPT App 传入 Chromium 的 `--proxy-server` 参数。它还会从 AppX 包及 `AppxManifest.xml` 动态识别当前入口，兼容 `ChatGPT.exe` 和 `Codex.exe`；App 更新后再次启动时，会重新解析程序路径并刷新快捷方式图标。
+
+启动器同时保留 Codex 子进程常用的 Git、Node.js、npm 和 ripgrep 路径修复，并提供 `--check` 和 `--env-check` 两个检查入口。前者显示代理端口状态、当前 App 路径、代理地址和快捷方式位置；后者额外显示这些命令行工具的实际路径及版本。
+
+代理端口关闭时仍可生成启动器，但使用前需要先启动本地代理软件。本 Skill 当前面向 Windows 10/11，不负责安装或配置代理软件，也不会修改系统级代理。修复时只覆盖它自己生成的启动器文件和 `Codex.lnk`，不会删除其他桌面内容。
 
 ### Codex Skill：project-handoff
 
@@ -172,6 +211,11 @@ Codex Skill 目前没有“安装完成后立即自动弹窗”的安装钩子�
 tj-toolbox/
 ├─ assets/                         # 桌面整理工具的图标等资源
 ├─ skills/
+│  ├─ codex-proxy-launcher/
+│  │  ├─ agents/openai.yaml        # Codex 界面元数据
+│  │  ├─ assets/                   # CMD 模板和动态 App 入口解析器
+│  │  ├─ scripts/                  # 桌面启动器安装脚本
+│  │  └─ SKILL.md                  # 代理端口收集、生成与验收流程
 │  ├─ project-handoff/
 │  │  ├─ agents/openai.yaml        # Codex 界面元数据
 │  │  └─ SKILL.md                  # Skill 触发条件与工作流程
