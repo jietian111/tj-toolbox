@@ -31,7 +31,7 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $outputPath = Join-Path $OutputDirectory 'DesktopOrganizer.exe'
 
 Write-Host "Compiler: $compiler"
-& $compiler /nologo /target:winexe /platform:anycpu "/win32icon:$iconPath" "/out:$outputPath" /r:System.Windows.Forms.dll $sourcePath
+& $compiler /nologo /target:winexe /platform:anycpu "/win32icon:$iconPath" "/out:$outputPath" /r:System.Windows.Forms.dll /r:System.Drawing.dll $sourcePath
 
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
     throw "Build failed. Compiler exit code: $LASTEXITCODE"
