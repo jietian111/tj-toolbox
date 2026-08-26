@@ -172,7 +172,7 @@ Skill 默认生成：
 
 ### Codex Skill：project-handoff
 
-[`project-handoff`](skills/project-handoff/) 用于为长期项目生成或更新 `HANDOFF.md`。交接文档会记录项目目标、当前状态、已经确认的决定、重要文件、限制、风险、待办事项和下一步操作，让一个无法访问旧聊天记录的新 AI 对话继续工作。
+[`project-handoff`](skills/project-handoff/) 用于保存、核验和恢复长期项目的 `HANDOFF.md`。它会记录当前状态、已确认决定、重要文件、风险、验证结果和下一步操作；新对话接手时还会比较交接时间、Git 状态和实际文件，先判断交接是否过期，再继续工作。
 
 #### 安装到另一台电脑
 
@@ -202,10 +202,12 @@ Copy-Item -Path (Join-Path $skillSource '*') -Destination $skillDestination -Rec
 #### 使用方式
 
 ```text
-使用 project-handoff，帮我整理当前项目并生成 HANDOFF.md。
+存个档。
+接着上次继续，先读 HANDOFF.md 并核对当前项目。
+看看上次做到哪里了，只汇报状态，先不要修改。
 ```
 
-也可以使用 `$project-handoff` 明确触发。该 Skill 还会在项目对话过长、准备暂停、需要切换对话或存在上下文遗失风险时建议生成交接文档。
+也可以使用 `$project-handoff` 明确触发。Skill 会根据表达自动选择 Save、Resume 或 Status 模式；在项目对话过长、准备暂停、需要切换对话或存在上下文遗失风险时，也会简短建议生成交接文档。
 
 ### Codex Skill：organize-obsidian-inbox
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "项目交接与长期记忆"
-  short_description: "为长项目生成可供新对话无缝继续工作的完整可靠交接文档"
-  default_prompt: "使用 $project-handoff 整理当前项目，并生成可供新对话无缝继续的 HANDOFF.md。"
+  short_description: "保存、核验并恢复长项目上下文，让新对话可靠继续工作"
+  default_prompt: "使用 $project-handoff 保存或读取 HANDOFF.md，核验项目状态并可靠继续工作。"

@@ -1,90 +1,110 @@
 ---
 name: project-handoff
-description: Create or refresh a comprehensive HANDOFF.md so a long-running project can be resumed in a new AI conversation without prior chat access. Use when the user asks to hand off, archive, pause, resume elsewhere, switch conversations or models, summarize project state, preserve project memory, or says the conversation is too long or the AI is forgetting earlier decisions. Also use proactively to briefly recommend a handoff when a substantial project is nearing a context reset, has accumulated many decisions and files, will be paused, or is about to move to another task; do not repeatedly interrupt ordinary short work.
+description: Save, inspect, or resume durable project context through HANDOFF.md so work can continue in a new AI conversation without prior chat access. Use for handoffs, pauses, context or model switches, status recovery, and plain-language requests such as "存个档", "记一下进度", "保存或压缩上下文", "我要开新对话继续", "接着上次继续", "先读交接文件", or "看看上次做到哪里了". Briefly recommend it when a substantial project faces real continuity risk, but do not interrupt ordinary short work.
 ---
 
 # Project Handoff
 
-Create an evidence-based project memory document that lets a new AI continue the work safely.
+Maintain a compact, evidence-based continuation point for an AI with no access to earlier chats.
 
-## Choose the action
+## Select the mode
 
-- If the user explicitly requests a handoff, create or refresh `HANDOFF.md`.
-- If the user only shows a likely need, briefly suggest using `$project-handoff` and explain why in one sentence. Continue the current work unless the user asks to generate it.
-- If a current `HANDOFF.md` exists, inspect it and update it instead of discarding useful verified context. Preserve user-authored details unless current evidence contradicts them.
-- Do not recommend this skill merely because a conversation has several messages. Recommend it only when continuity risk is material.
+- **Save**: Create or refresh `HANDOFF.md` when the user asks to save, archive, summarize, pause, switch conversations or models, or preserve context.
+- **Resume**: Read and verify `HANDOFF.md` when the user asks to continue, take over, read the handoff, or resume previous work. Report material drift before changing files, then continue if the requested next action is clear and authorized.
+- **Status**: Read and compare the handoff with the current project when the user asks where work stopped or what remains. Report only; do not implement changes unless asked.
+- **Suggest**: If continuity risk is material but the user has not requested a handoff, recommend it once in one sentence and continue the current work.
 
-## Gather evidence
+Treat natural Chinese requests as direct mode selections without requiring the skill name. Do not trigger merely because a conversation has several messages.
 
-Use the current conversation plus read-only workspace inspection. Prefer facts that can be verified from:
+## Resolve the project and evidence
 
-1. User instructions and explicitly approved decisions.
-2. Current files, configuration, tests, generated deliverables, and version-control state.
-3. Existing project documentation and prior handoff files.
+Resolve the intended project root from the user's named path, the current Git root, or the current workspace. If more than one plausible project would materially change the result, ask before writing.
+
+Prefer facts in this order:
+
+1. Explicit user instructions and approved decisions.
+2. Current files, configuration, deliverables, tests, and version-control state.
+3. Existing project documentation and the prior handoff.
 4. Clearly labelled inference when direct evidence is unavailable.
 
-Inspect only what is relevant. Check the workspace root, important source and output directories, `git status`, recent relevant commits, and available verification results when applicable. Never expose credentials, tokens, personal secrets, or irrelevant private data.
+Inspect only relevant material. Check the project root, important files, `git status`, current branch and commit, recent relevant commits, and available verification results when applicable. Never include credentials, secret values, private transcripts, caches, or irrelevant personal data. Record environment-variable names only; redact their values.
 
-Distinguish clearly among completed, partially completed, planned, blocked, and unverified work. Do not turn proposals into decisions or claim that a command, test, delivery, or deployment succeeded without evidence.
+Distinguish completed, in progress, planned, blocked, failed, and unverified work. Never turn proposals into approved decisions or claim a command, test, delivery, or deployment succeeded without evidence.
 
-## Write `HANDOFF.md`
+## Save a handoff
 
-Write for an AI that has zero access to previous chats and may resume the project months later. Keep the opening summary readable in under two minutes, followed by operational detail.
+If `HANDOFF.md` exists, preserve still-valid user-authored facts and reconcile stale status instead of blindly replacing it. Do not auto-commit or push the handoff.
 
-Use the following structure, omitting only sections that truly do not apply:
+Write the following structure, omitting sections that truly do not apply:
 
 ```markdown
 # Project Handoff
 
 ## Memory snapshot
-Project identity, purpose, current stage, most important state, and immediate next action.
+Project identity, current objective and stage, most important state, and the first next action. Keep this readable in under two minutes.
+
+## Handoff metadata
+- Generated at: exact local date, time, and UTC offset
+- Intended receiver: next session, named agent, or either
+- Project root: portable project identity or repository root
+- Current machine path: absolute path, explicitly marked machine-specific
+- Git state: remote, branch, commit, and clean/dirty/not applicable
 
 ## Project overview
-Name, goals, scope, definition of success, and relevant user or business context.
-
-## Current workspace
-Absolute project path, important files/directories and their purpose, runtime or environment facts, and version-control state.
+Goals, scope, definition of success, and essential user or business context.
 
 ## Current status
-Completed work, partial work, verified deliverables, and verification evidence.
+Completed, in-progress, blocked, and unverified work; verified deliverables and evidence.
 
-## Approved decisions
-Product, design, technical, naming, workflow, and other decisions with rationale when known.
+## Approved decisions and constraints
+Decisions with rationale when known; user preferences, compatibility needs, and must/must-not boundaries.
 
-## Constraints and preferences
-User preferences, non-negotiable requirements, compatibility needs, and boundaries.
+## Key files and durable references
+Project-relative paths first, why each matters, and links to existing README, specs, plans, architecture, or design documents.
 
-## Technical and design system
-Architecture, frameworks, dependencies, APIs, integrations, hosting, typography, colors, layout, components, and media rules as applicable.
-
-## Known issues and risks
-Bugs, limitations, missing permissions or inputs, uncertain facts, and likely failure modes.
+## Known issues, risks, and failed attempts
+Bugs, limitations, uncertainties, and only those failed approaches whose result or retry condition will prevent repeated work.
 
 ## Open tasks
-Prioritized unfinished work with status and dependencies.
+Prioritized unfinished work with dependencies and observable acceptance criteria.
 
 ## Next recommended actions
-Concrete ordered steps, including how to validate completion.
-
-## Do not do
-Specific regressions, rejected approaches, destructive actions, or assumptions the next AI must avoid.
-
-## Key conversation insights
-Discoveries and decision rationale that cannot be reconstructed from files alone.
+Concrete ordered steps, real commands when verified, and how to validate completion.
 
 ## Resume instructions
-Exact starting point, commands if verified, files to read first, and questions that still require the user.
+What to read first, the exact starting point, machine or transport requirements, and unresolved questions that need the user.
 ```
 
-Use exact dates, paths, filenames, commands, and versions where they matter. Mark time-sensitive facts with the date verified. Keep commands copyable and avoid speculative commands.
+Keep the handoff compact. Link to durable project documents instead of repeating their contents. Include only conversation insights that cannot be reconstructed from files. Front-load the next action, use project-relative paths where possible, label absolute paths as machine-specific, and avoid exhaustive directory trees or work logs.
 
-## Validate before delivery
+Use exact dates, filenames, commands, versions, and verification results where they matter. Mark time-sensitive facts with the verification date. Never invent commands merely to make the handoff look complete.
 
-- Confirm `HANDOFF.md` exists in the intended project root and is readable.
-- Check that paths and named deliverables exist where claimed.
-- Reconcile completed work against open tasks so the same item is not listed inconsistently.
-- Search for accidental secrets before finishing.
-- State what was created or updated and give the user a clickable file link.
-- Provide this copyable continuation prompt: `请先完整阅读 HANDOFF.md，然后从“Next recommended actions”继续；不要假设你能访问以前的聊天记录。`
+### Optional history
 
-If evidence is incomplete, still produce a useful handoff but label gaps explicitly rather than inventing details.
+Update `HANDOFF.md` in place by default. Archive the previous file only when the user requests history or the prior snapshot has clear audit value. In that case, copy it to `.handoff/archive/HANDOFF-YYYYMMDD-HHMM.md` before updating. Do not use symlinks, prune archives, or create the archive structure for ordinary saves.
+
+## Resume or inspect a handoff
+
+Before trusting the file:
+
+1. Read the handoff and the durable files it directly references.
+2. Compare its timestamp, project identity, machine path, branch, commit, working-tree state, and named deliverables with the current project.
+3. Classify it as **current**, **partially stale**, or **unreliable**, and state the evidence for any material drift.
+4. Reconcile stale facts in the handoff only when the user asked to save or refresh it. In Status mode, do not write.
+5. On Resume, give a short grounding summary and begin from the recorded next action only when it remains valid and is within the user's request. Otherwise stop at the concrete discrepancy or required choice.
+
+Do not treat `HANDOFF.md` as authority when current project evidence contradicts it. Do not overwrite `AGENTS.md`, `CLAUDE.md`, README files, specifications, or task trackers; they remain durable sources of truth.
+
+## Validate delivery
+
+For Save:
+
+- Confirm `HANDOFF.md` exists at the intended project root and is readable.
+- Verify claimed paths and deliverables, reconcile completed work against open tasks, and scan the file for accidental secrets.
+- Report the path, Git state captured, and any unresolved evidence gaps.
+- Provide: `请先完整阅读 HANDOFF.md，核对它与当前项目是否一致，然后从“Next recommended actions”继续；不要假设你能访问以前的聊天记录。`
+
+For Resume or Status:
+
+- Report the handoff path, freshness classification, material drift, current objective, and next valid action.
+- If evidence is incomplete, label the gap instead of guessing.
