@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32;
@@ -139,8 +143,49 @@ internal static class Program
         public int Priority;
         public string FileKind;
         public IntPtr Identity;
+        public IntPtr Pidl;
         public int NameOccurrence;
         public bool IsWhitelisted;
+        public bool IsOutsidePrimaryScreen;
+        public string ParsingName;
+        public ShellPoint CurrentPosition;
+        public ShellPoint TargetPosition;
+    }
+
+    private sealed class LayoutPlan
+    {
+        public IntPtr ListView;
+        public DesktopFolderView FolderView;
+        public List<DesktopItem> AllItems;
+        public List<DesktopItem> SortedItems;
+        public int ProtectedCount;
+        public int OutsidePrimaryCount;
+        public int Rows;
+        public int Columns;
+        public int SpacingX;
+        public int SpacingY;
+    }
+
+    private sealed class OperationResult
+    {
+        public int Arranged;
+        public int Protected;
+        public int Fixed;
+        public int Restored;
+        public int Skipped;
+        public int Applications;
+        public int Folders;
+        public int Files;
+        public bool BackupSaved;
+        public string Details;
+    }
+
+    private sealed class LayoutRecord
+    {
+        public string ParsingName;
+        public string Name;
+        public int X;
+        public int Y;
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -158,6 +203,16 @@ internal static class Program
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
     [DllImport("user32.dll")]
     private static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")]
+    private static extern bool ScreenToClient(IntPtr hWnd, ref POINT point);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int command);
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
     private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int index);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
@@ -166,6 +221,10 @@ internal static class Program
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDPIAware();
     [DllImport("kernel32.dll")]
     private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
     [DllImport("kernel32.dll")]
@@ -182,55 +241,48 @@ internal static class Program
     private static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern bool SHGetPathFromIDList(IntPtr pidl, StringBuilder path);
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderIDList(ref Guid folderId, uint flags, IntPtr token, out IntPtr pidl);
+    [DllImport("shell32.dll")]
+    private static extern IntPtr ILCombine(IntPtr parentPidl, IntPtr childPidl);
+    [DllImport("shell32.dll")]
+    private static extern void ILFree(IntPtr pidl);
+    [DllImport("shell32.dll")]
+    private static extern int SHGetNameFromIDList(IntPtr pidl, uint displayNameType, out IntPtr name);
 
     [STAThread]
     private static void Main()
     {
+        EnableDpiAwareness();
+        bool ownsMutex;
+        using (var mutex = new Mutex(true, @"Local\DesktopOrganizer.V2.SingleInstance", out ownsMutex))
+        {
+            if (!ownsMutex)
+            {
+                IntPtr existing = FindWindow(null, "一键整理桌面");
+                if (existing != IntPtr.Zero)
+                {
+                    ShowWindow(existing, 9);
+                    SetForegroundWindow(existing);
+                }
+                return;
+            }
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new OrganizerForm());
+        }
+    }
+
+    private static void EnableDpiAwareness()
+    {
         try
         {
-            EnableRequiredSystemIcons();
-            SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
-            Thread.Sleep(700);
-            IntPtr listView = FindDesktopListView();
-            if (listView == IntPtr.Zero)
-                throw new InvalidOperationException("没有找到桌面图标区域。请先显示桌面后再运行此程序。");
-
-            SendMessage(listView, WM_KEYDOWN, (IntPtr)VK_F5, IntPtr.Zero);
-            SendMessage(listView, WM_KEYUP, (IntPtr)VK_F5, IntPtr.Zero);
-            Thread.Sleep(500);
-
-            DesktopFolderView folderView = DesktopFolderView.Open();
-            List<DesktopItem> items = ReadItems(listView, folderView);
-            if (items.Count == 0)
-                throw new InvalidOperationException("未读取到桌面图标。");
-
-            int protectedCount = items.Count(x => x.IsWhitelisted);
-            items = items.Where(x => !x.IsWhitelisted)
-                         .OrderBy(x => x.Group)
-                         .ThenBy(x => x.Priority)
-                         .ThenBy(x => x.FileKind ?? "")
-                         .ThenBy(x => x.Name, new ChineseNameComparer())
-                         .ToList();
-            var occurrences = new Dictionary<string, int>(StringComparer.CurrentCultureIgnoreCase);
-            foreach (DesktopItem item in items)
-            {
-                int occurrence;
-                occurrences.TryGetValue(item.Name, out occurrence);
-                item.NameOccurrence = occurrence;
-                occurrences[item.Name] = occurrence + 1;
-            }
-
-            DisableAutomaticArrange(listView);
-            PositionItems(listView, folderView, items);
-
-            MessageBox.Show(
-                "整理完成。\n\n顺序：此电脑、回收站、控制面板 → 其他应用程序 → 实体文件夹 → 文件夹快捷方式 → 压缩文件 → 分类文件。\n每组按中文拼音/英文首字母排序；排列方向为从上到下、从左到右。\n右侧三分之一区域有 " + protectedCount + " 个图标已保留原位。",
-                "一键整理桌面", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            // Windows 10/11: keep window rectangles and IFolderView coordinates in the same physical-pixel space.
+            if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return; // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show("整理未完成：\n" + ex.Message, "一键整理桌面", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        catch (EntryPointNotFoundException) { }
+        try { SetProcessDPIAware(); }
+        catch (EntryPointNotFoundException) { }
     }
 
     private static void EnableRequiredSystemIcons()
@@ -270,72 +322,90 @@ internal static class Program
 
     private static List<DesktopItem> ReadItems(IntPtr listView, DesktopFolderView folderView)
     {
-        uint pid;
-        GetWindowThreadProcessId(listView, out pid);
-        IntPtr process = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, pid);
-        if (process == IntPtr.Zero) throw new InvalidOperationException("无法读取桌面图标。");
+        RECT desktopArea;
+        if (!GetClientRect(listView, out desktopArea))
+            throw new InvalidOperationException("无法读取桌面可用区域。");
+        RECT primaryArea = GetPrimaryScreenClientArea(listView, desktopArea);
+        int whitelistStart = primaryArea.Left + ((primaryArea.Right - primaryArea.Left) * 2) / 3;
+        int itemCount = folderView.GetItemCount();
+        Guid desktopFolderId = new Guid("B4BFCC3A-DB2C-424C-B029-7FE99A87C641");
+        IntPtr desktopPidl;
+        int rootResult = SHGetKnownFolderIDList(ref desktopFolderId, 0, IntPtr.Zero, out desktopPidl);
+        if (rootResult < 0 || desktopPidl == IntPtr.Zero)
+            throw new InvalidOperationException("无法读取 Windows 桌面标识（错误 0x" + rootResult.ToString("X8") + "）。");
 
+        var items = new List<DesktopItem>();
         try
         {
-            int itemCount = SendMessage(listView, LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32();
-            int textBytes = 520 * sizeof(char);
-            int itemBytes = Marshal.SizeOf(typeof(LVITEM));
-            IntPtr remoteText = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)textBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            IntPtr remoteItem = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)itemBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            IntPtr remotePoint = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)Marshal.SizeOf(typeof(POINT)), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            if (remoteText == IntPtr.Zero || remoteItem == IntPtr.Zero || remotePoint == IntPtr.Zero)
-                throw new InvalidOperationException("无法为桌面图标读取分配内存。");
-            try
+            for (int i = 0; i < itemCount; i++)
             {
-                var items = new List<DesktopItem>();
-                var pathResolver = new DesktopPathResolver();
-                RECT desktopArea;
-                GetClientRect(listView, out desktopArea);
-                int whitelistStart = ((desktopArea.Right - desktopArea.Left) * 2) / 3;
-                for (int i = 0; i < itemCount; i++)
+                IntPtr childPidl = IntPtr.Zero;
+                IntPtr absolutePidl = IntPtr.Zero;
+                IntPtr namePointer = IntPtr.Zero;
+                IntPtr parsingPointer = IntPtr.Zero;
+                try
                 {
-                    LVITEM lv = new LVITEM { iSubItem = 0, pszText = remoteText, cchTextMax = 520 };
-                    IntPtr local = Marshal.AllocHGlobal(itemBytes);
-                    try
-                    {
-                        Marshal.StructureToPtr(lv, local, false);
-                        byte[] raw = new byte[itemBytes];
-                        Marshal.Copy(local, raw, 0, itemBytes);
-                        IntPtr written;
-                        if (!WriteProcessMemory(process, remoteItem, raw, raw.Length, out written)) continue;
-                        SendMessage(listView, LVM_GETITEMTEXTW, (IntPtr)i, remoteItem);
-                        byte[] text = new byte[textBytes];
-                        IntPtr read;
-                        if (!ReadProcessMemory(process, remoteText, text, text.Length, out read)) continue;
-                        string name = Encoding.Unicode.GetString(text);
-                        int terminator = name.IndexOf('\0');
-                        if (terminator >= 0) name = name.Substring(0, terminator);
-                        if (String.IsNullOrWhiteSpace(name)) continue;
-                        IntPtr identity = ReadItemIdentity(listView, process, remoteItem, i, itemBytes);
-                        string sourcePath = TryGetPathFromRemotePidl(process, identity) ?? pathResolver.Resolve(name);
-                        DesktopItem item = Classify(i, name, identity, sourcePath);
-                        POINT currentPosition;
-                        ShellPoint shellPosition;
-                        if (folderView.TryGetItemPosition(i, out shellPosition))
-                            currentPosition = new POINT { X = shellPosition.X, Y = shellPosition.Y };
-                        else
-                            currentPosition = ReadItemPosition(listView, process, remotePoint, i);
-                        // The three system icons stay fixed at the beginning even if moved accidentally.
-                        item.IsWhitelisted = item.Priority >= 3 && currentPosition.X >= whitelistStart;
-                        items.Add(item);
-                    }
-                    finally { Marshal.FreeHGlobal(local); }
+                    childPidl = folderView.GetItemPidl(i);
+                    absolutePidl = ILCombine(desktopPidl, childPidl);
+                    if (absolutePidl == IntPtr.Zero)
+                        throw new InvalidOperationException("无法组合第 " + (i + 1) + " 个桌面图标的标识。");
+
+                    int nameResult = SHGetNameFromIDList(absolutePidl, 0, out namePointer); // SIGDN_NORMALDISPLAY
+                    if (nameResult < 0 || namePointer == IntPtr.Zero)
+                        throw new InvalidOperationException("无法读取第 " + (i + 1) + " 个桌面图标的名称。");
+                    string name = Marshal.PtrToStringUni(namePointer);
+                    if (String.IsNullOrWhiteSpace(name))
+                        throw new InvalidOperationException("第 " + (i + 1) + " 个桌面图标名称为空。");
+
+                    var path = new StringBuilder(32768);
+                    string sourcePath = SHGetPathFromIDList(absolutePidl, path) ? path.ToString() : null;
+                    string parsingName = null;
+                    if (SHGetNameFromIDList(absolutePidl, 0x80028000, out parsingPointer) >= 0 && parsingPointer != IntPtr.Zero)
+                        parsingName = Marshal.PtrToStringUni(parsingPointer); // SIGDN_DESKTOPABSOLUTEPARSING
+                    ShellPoint currentPosition;
+                    if (!folderView.TryGetItemPosition(childPidl, out currentPosition))
+                        throw new InvalidOperationException("无法读取桌面图标“" + name + "”的位置。");
+
+                    DesktopItem item = Classify(i, name, childPidl, sourcePath);
+                    item.Pidl = childPidl;
+                    item.ParsingName = parsingName;
+                    item.CurrentPosition = currentPosition;
+                    childPidl = IntPtr.Zero; // Ownership is transferred to the DesktopItem.
+                    // The three system icons stay fixed at the beginning even if moved accidentally.
+                    item.IsOutsidePrimaryScreen = Screen.AllScreens.Length > 1 &&
+                        (currentPosition.X < primaryArea.Left || currentPosition.X >= primaryArea.Right ||
+                         currentPosition.Y < primaryArea.Top || currentPosition.Y >= primaryArea.Bottom);
+                    item.IsWhitelisted = item.Priority >= 3 &&
+                        (item.IsOutsidePrimaryScreen || currentPosition.X >= whitelistStart);
+                    items.Add(item);
                 }
-                return items;
+                finally
+                {
+                    if (namePointer != IntPtr.Zero) Marshal.FreeCoTaskMem(namePointer);
+                    if (parsingPointer != IntPtr.Zero) Marshal.FreeCoTaskMem(parsingPointer);
+                    if (absolutePidl != IntPtr.Zero) ILFree(absolutePidl);
+                    if (childPidl != IntPtr.Zero) Marshal.FreeCoTaskMem(childPidl);
+                }
             }
-            finally
-            {
-                if (remoteText != IntPtr.Zero) VirtualFreeEx(process, remoteText, UIntPtr.Zero, MEM_RELEASE);
-                if (remoteItem != IntPtr.Zero) VirtualFreeEx(process, remoteItem, UIntPtr.Zero, MEM_RELEASE);
-                if (remotePoint != IntPtr.Zero) VirtualFreeEx(process, remotePoint, UIntPtr.Zero, MEM_RELEASE);
-            }
+            return items;
         }
-        finally { CloseHandle(process); }
+        catch
+        {
+            foreach (DesktopItem item in items)
+                if (item.Pidl != IntPtr.Zero) Marshal.FreeCoTaskMem(item.Pidl);
+            throw;
+        }
+        finally { Marshal.FreeCoTaskMem(desktopPidl); }
+    }
+
+    private static RECT GetPrimaryScreenClientArea(IntPtr listView, RECT fallback)
+    {
+        if (Screen.AllScreens.Length <= 1) return fallback;
+        Rectangle bounds = Screen.PrimaryScreen.WorkingArea;
+        var topLeft = new POINT { X = bounds.Left, Y = bounds.Top };
+        var bottomRight = new POINT { X = bounds.Right, Y = bounds.Bottom };
+        if (!ScreenToClient(listView, ref topLeft) || !ScreenToClient(listView, ref bottomRight)) return fallback;
+        return new RECT { Left = topLeft.X, Top = topLeft.Y, Right = bottomRight.X, Bottom = bottomRight.Y };
     }
 
     private static IntPtr ReadItemIdentity(IntPtr listView, IntPtr process, IntPtr remoteItem, int index, int itemBytes)
@@ -572,6 +642,249 @@ internal static class Program
         return applications.Any(x => String.Equals(extension, x, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static LayoutPlan CreatePlan(bool ensureSystemIcons)
+    {
+        if (ensureSystemIcons)
+        {
+            EnableRequiredSystemIcons();
+            SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
+            Thread.Sleep(700);
+        }
+        IntPtr listView = FindDesktopListView();
+        if (listView == IntPtr.Zero)
+            throw new InvalidOperationException("没有找到桌面图标区域。请先显示桌面后再试。");
+        SendMessage(listView, WM_KEYDOWN, (IntPtr)VK_F5, IntPtr.Zero);
+        SendMessage(listView, WM_KEYUP, (IntPtr)VK_F5, IntPtr.Zero);
+        Thread.Sleep(ensureSystemIcons ? 500 : 180);
+
+        DesktopFolderView folderView = DesktopFolderView.Open();
+        List<DesktopItem> allItems = ReadItems(listView, folderView);
+        if (allItems.Count == 0) throw new InvalidOperationException("未读取到桌面图标。");
+        List<DesktopItem> items = allItems.Where(x => !x.IsWhitelisted)
+            .OrderBy(x => x.Group).ThenBy(x => x.Priority).ThenBy(x => x.FileKind ?? "")
+            .ThenBy(x => x.Name, new ChineseNameComparer()).ToList();
+
+        var occurrences = new Dictionary<string, int>(StringComparer.CurrentCultureIgnoreCase);
+        foreach (DesktopItem item in items)
+        {
+            int occurrence;
+            occurrences.TryGetValue(item.Name, out occurrence);
+            item.NameOccurrence = occurrence;
+            occurrences[item.Name] = occurrence + 1;
+        }
+
+        RECT wholeArea;
+        if (!GetClientRect(listView, out wholeArea)) throw new InvalidOperationException("无法读取桌面可用区域。");
+        RECT area = GetPrimaryScreenClientArea(listView, wholeArea);
+        int safeWidth = Math.Max(1, ((area.Right - area.Left) * 2) / 3);
+        ShellPoint viewSpacing = folderView.GetSpacing();
+        int spacingX = Math.Max(85, viewSpacing.X > 0 ? viewSpacing.X : GetSystemMetrics(SM_CXICONSPACING));
+        int spacingY = Math.Max(90, viewSpacing.Y > 0 ? viewSpacing.Y : GetSystemMetrics(SM_CYICONSPACING));
+        int rows = Math.Max(1, (area.Bottom - area.Top - 20) / spacingY);
+        int columns = Math.Max(1, (safeWidth - 20) / spacingX);
+        if (items.Count >= rows * columns)
+            throw new InvalidOperationException("左侧整理区空间不足，本次操作已停止。右侧保留区没有被修改。");
+        for (int position = 0; position < items.Count; position++)
+            items[position].TargetPosition = new ShellPoint {
+                X = area.Left + 10 + (position / rows) * spacingX,
+                Y = area.Top + 10 + (position % rows) * spacingY
+            };
+
+        return new LayoutPlan {
+            ListView = listView, FolderView = folderView, AllItems = allItems, SortedItems = items,
+            ProtectedCount = allItems.Count(x => x.IsWhitelisted),
+            OutsidePrimaryCount = allItems.Count(x => x.IsOutsidePrimaryScreen),
+            Rows = rows, Columns = columns, SpacingX = spacingX, SpacingY = spacingY
+        };
+    }
+
+    private static OperationResult OrganizeDesktop()
+    {
+        LayoutPlan plan = null;
+        try
+        {
+            plan = CreatePlan(true);
+            bool needsMovement = plan.SortedItems.Any(x => !IsNear(x.CurrentPosition, x.TargetPosition, plan.SpacingX, plan.SpacingY));
+            if (needsMovement)
+            {
+                SaveLayout(plan.AllItems);
+                DisableAutomaticArrange(plan.ListView);
+                PositionItems(plan.FolderView, plan.SortedItems, plan.Rows, plan.Columns, plan.SpacingX, plan.SpacingY);
+            }
+            return new OperationResult {
+                Arranged = plan.SortedItems.Count,
+                Protected = plan.ProtectedCount,
+                Fixed = plan.SortedItems.Count(x => x.Priority < 3),
+                BackupSaved = needsMovement,
+                Details = !needsMovement ? "当前布局已经符合规则，图标坐标保持不变。" :
+                    plan.OutsidePrimaryCount > 0 ? "检测到其他显示器图标，已安全保留 " + plan.OutsidePrimaryCount + " 个。" : null
+            };
+        }
+        finally { if (plan != null) FreeItems(plan.AllItems); }
+    }
+
+    private static OperationResult PreviewDesktop()
+    {
+        LayoutPlan plan = null;
+        try
+        {
+            plan = CreatePlan(false);
+            int applications = plan.SortedItems.Count(x => x.Group == 0);
+            int folders = plan.SortedItems.Count(x => x.Group == 1);
+            int shortcuts = plan.SortedItems.Count(x => x.Group == 2);
+            int archives = plan.SortedItems.Count(x => x.Group == 3);
+            int files = plan.SortedItems.Count(x => x.Group == 4);
+            return new OperationResult {
+                Arranged = plan.SortedItems.Count, Protected = plan.ProtectedCount,
+                Applications = applications, Folders = folders + shortcuts, Files = archives + files,
+                Details = "应用程序 " + applications + "  ·  文件夹 " + folders + "  ·  文件夹快捷方式 " + shortcuts +
+                          "\n压缩文件 " + archives + "  ·  普通文件 " + files +
+                          "\n需要网格 " + plan.SortedItems.Count + " / " + (plan.Rows * plan.Columns - 1)
+            };
+        }
+        finally { if (plan != null) FreeItems(plan.AllItems); }
+    }
+
+    private static string DataDirectory
+    {
+        get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopOrganizer"); }
+    }
+
+    private static string LayoutPath { get { return Path.Combine(DataDirectory, "last-layout.dat"); } }
+
+    private static void SaveLayout(List<DesktopItem> items)
+    {
+        Directory.CreateDirectory(DataDirectory);
+        string temporary = LayoutPath + ".tmp";
+        using (var writer = new StreamWriter(temporary, false, new UTF8Encoding(false)))
+        {
+            writer.WriteLine("DESKTOP_ORGANIZER_LAYOUT_V2");
+            writer.WriteLine(DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture));
+            foreach (DesktopItem item in items.Where(x => !String.IsNullOrWhiteSpace(x.ParsingName)))
+                writer.WriteLine(Encode(item.ParsingName) + "\t" + Encode(item.Name) + "\t" +
+                    item.CurrentPosition.X.ToString(CultureInfo.InvariantCulture) + "\t" +
+                    item.CurrentPosition.Y.ToString(CultureInfo.InvariantCulture));
+        }
+        File.Copy(temporary, LayoutPath, true);
+        File.Delete(temporary);
+    }
+
+    private static List<LayoutRecord> LoadLayout()
+    {
+        if (!File.Exists(LayoutPath)) throw new InvalidOperationException("还没有可撤销的桌面布局。请先完成一次整理。");
+        string[] lines = File.ReadAllLines(LayoutPath, Encoding.UTF8);
+        if (lines.Length < 2 || lines[0] != "DESKTOP_ORGANIZER_LAYOUT_V2")
+            throw new InvalidOperationException("上次布局备份无法识别，未对桌面做任何修改。");
+        var result = new List<LayoutRecord>();
+        for (int i = 2; i < lines.Length; i++)
+        {
+            string[] part = lines[i].Split('\t');
+            int x, y;
+            if (part.Length != 4 || !Int32.TryParse(part[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out x) ||
+                !Int32.TryParse(part[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out y)) continue;
+            try { result.Add(new LayoutRecord { ParsingName = Decode(part[0]), Name = Decode(part[1]), X = x, Y = y }); }
+            catch (FormatException) { }
+        }
+        if (result.Count == 0) throw new InvalidOperationException("上次布局备份中没有可恢复的图标。");
+        return result;
+    }
+
+    private static string Encode(string value) { return Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? "")); }
+    private static string Decode(string value) { return Encoding.UTF8.GetString(Convert.FromBase64String(value)); }
+
+    private static OperationResult RestoreDesktop()
+    {
+        List<LayoutRecord> records = LoadLayout();
+        LayoutPlan plan = null;
+        try
+        {
+            plan = CreatePlan(false);
+            var current = plan.AllItems.Where(x => !String.IsNullOrWhiteSpace(x.ParsingName))
+                .GroupBy(x => x.ParsingName, StringComparer.OrdinalIgnoreCase)
+                .Where(x => x.Count() == 1).ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
+            var matched = new List<DesktopItem>();
+            var targets = new List<ShellPoint>();
+            int skipped = 0;
+            foreach (LayoutRecord record in records)
+            {
+                DesktopItem item;
+                if (!current.TryGetValue(record.ParsingName, out item)) { skipped++; continue; }
+                ShellPoint target = new ShellPoint { X = record.X, Y = record.Y };
+                bool occupiedByUnmatched = plan.AllItems.Any(other => other != item &&
+                    !records.Any(saved => String.Equals(saved.ParsingName, other.ParsingName, StringComparison.OrdinalIgnoreCase)) &&
+                    IsNear(other.CurrentPosition, target, plan.SpacingX, plan.SpacingY));
+                if (occupiedByUnmatched) { skipped++; continue; }
+                matched.Add(item);
+                targets.Add(target);
+            }
+            if (matched.Count == 0) throw new InvalidOperationException("没有找到可安全恢复的桌面图标，桌面未被修改。");
+            DisableAutomaticArrange(plan.ListView);
+            plan.FolderView.SelectAndPositionItems(matched.Select(x => x.Pidl).ToArray(), targets.ToArray(), SVSI_POSITIONITEM);
+            Thread.Sleep(250);
+            int restored = 0;
+            for (int i = 0; i < matched.Count; i++)
+            {
+                ShellPoint actual;
+                if (plan.FolderView.TryGetItemPosition(matched[i].Pidl, out actual) &&
+                    IsNear(actual, targets[i], plan.SpacingX, plan.SpacingY)) restored++;
+                else skipped++;
+            }
+            return new OperationResult { Restored = restored, Skipped = skipped };
+        }
+        finally { if (plan != null) FreeItems(plan.AllItems); }
+    }
+
+    private static string ExportDiagnostics()
+    {
+        LayoutPlan plan = null;
+        try
+        {
+            plan = CreatePlan(false);
+            Directory.CreateDirectory(DataDirectory);
+            string path = Path.Combine(DataDirectory, "DesktopOrganizer-Diagnostics-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".txt");
+            using (var writer = new StreamWriter(path, false, new UTF8Encoding(false)))
+            {
+                writer.WriteLine("一键整理桌面 V2 诊断信息");
+                writer.WriteLine("生成时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+                writer.WriteLine("Windows: " + Environment.OSVersion.VersionString);
+                writer.WriteLine("显示器数量: " + Screen.AllScreens.Length);
+                writer.WriteLine("主显示器工作区: " + Screen.PrimaryScreen.WorkingArea);
+                writer.WriteLine("桌面项目: " + plan.AllItems.Count);
+                writer.WriteLine("Shell 图标间距: " + plan.SpacingX + " x " + plan.SpacingY);
+                writer.WriteLine("主屏网格: " + plan.Rows + " x " + plan.Columns);
+                writer.WriteLine("其他显示器安全保留: " + plan.OutsidePrimaryCount);
+                writer.WriteLine();
+                foreach (DesktopItem item in plan.AllItems)
+                    writer.WriteLine(item.Name + " | " + CategoryName(item) + " | 当前=" + item.CurrentPosition.X + "," + item.CurrentPosition.Y +
+                        " | 目标=" + item.TargetPosition.X + "," + item.TargetPosition.Y + " | 保留=" + item.IsWhitelisted +
+                        " | 固定=" + (item.Priority < 3) + " | identity=" + HashIdentity(item.ParsingName));
+            }
+            return path;
+        }
+        finally { if (plan != null) FreeItems(plan.AllItems); }
+    }
+
+    private static string CategoryName(DesktopItem item)
+    {
+        if (item.Priority < 3) return "固定项目";
+        return item.Group == 0 ? "应用程序" : item.Group == 1 ? "实体文件夹" : item.Group == 2 ? "文件夹快捷方式" :
+            item.Group == 3 ? "压缩文件" : (String.IsNullOrEmpty(item.FileKind) ? "普通文件" : item.FileKind.Substring(Math.Min(3, item.FileKind.Length)));
+    }
+
+    private static string HashIdentity(string identity)
+    {
+        if (String.IsNullOrEmpty(identity)) return "none";
+        using (SHA256 sha = SHA256.Create())
+            return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(identity))).Replace("-", "").Substring(0, 16);
+    }
+
+    private static void FreeItems(IEnumerable<DesktopItem> items)
+    {
+        if (items == null) return;
+        foreach (DesktopItem item in items)
+            if (item.Pidl != IntPtr.Zero) { Marshal.FreeCoTaskMem(item.Pidl); item.Pidl = IntPtr.Zero; }
+    }
+
     private static void DisableAutomaticArrange(IntPtr listView)
     {
         long style = GetWindowLongPtr64(listView, GWL_STYLE).ToInt64();
@@ -580,46 +893,27 @@ internal static class Program
         SetWindowPos(listView, IntPtr.Zero, 0, 0, 0, 0, 0x0020 | 0x0001 | 0x0002 | 0x0004 | 0x0020);
     }
 
-    private static void PositionItems(IntPtr listView, DesktopFolderView folderView, List<DesktopItem> items)
+    private static void PositionItems(DesktopFolderView folderView, List<DesktopItem> items, int rows, int columns, int spacingX, int spacingY)
     {
-        RECT area;
-        if (!GetClientRect(listView, out area)) throw new InvalidOperationException("无法读取桌面可用区域。");
-        int width = Math.Max(1, area.Right - area.Left);
-        int safeWidth = Math.Max(1, (width * 2) / 3);
-        int spacingX = Math.Max(85, GetSystemMetrics(SM_CXICONSPACING));
-        int spacingY = Math.Max(90, GetSystemMetrics(SM_CYICONSPACING));
-        int rows = Math.Max(1, (area.Bottom - area.Top - 20) / spacingY);
-        int columns = Math.Max(1, (safeWidth - 20) / spacingX);
-        if (items.Count >= rows * columns)
-            throw new InvalidOperationException("左侧可整理区域至少需要保留一个空格，才能可靠地交换图标位置。请减少一个图标或缩小图标后重试。");
+        if (items.Count == 0) return;
         var pidls = new IntPtr[items.Count];
         var points = new ShellPoint[items.Count];
-        try
+        for (int position = 0; position < items.Count; position++)
         {
-            for (int position = 0; position < items.Count; position++)
-            {
-                int x = 10 + (position / rows) * spacingX;
-                int y = 10 + (position % rows) * spacingY;
-                pidls[position] = folderView.GetItemPidl(items[position].Index);
-                points[position] = new ShellPoint { X = x, Y = y };
-            }
-
-            int mismatchCount = items.Count;
-            for (int attempt = 0; attempt < 3; attempt++)
-            {
-                ArrangeWithSpareSlot(folderView, pidls, points, rows, columns, spacingX, spacingY);
-                Thread.Sleep(200);
-                mismatchCount = CountPositionMismatches(folderView, pidls, points, spacingX, spacingY);
-                if (mismatchCount == 0) return;
-            }
-
-            throw new InvalidOperationException("Windows 桌面尚有 " + mismatchCount + " 个图标未到达目标位置，请稍后重试。");
+            pidls[position] = items[position].Pidl;
+            points[position] = items[position].TargetPosition;
         }
-        finally
+
+        int mismatchCount = items.Count;
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            foreach (IntPtr pidl in pidls)
-                if (pidl != IntPtr.Zero) Marshal.FreeCoTaskMem(pidl);
+            ArrangeWithSpareSlot(folderView, pidls, points, rows, columns, spacingX, spacingY);
+            Thread.Sleep(200);
+            mismatchCount = CountPositionMismatches(folderView, pidls, points, spacingX, spacingY);
+            if (mismatchCount == 0) return;
         }
+
+        throw new InvalidOperationException("Windows 桌面尚有 " + mismatchCount + " 个图标未到达目标位置，请稍后重试。");
     }
 
     private static void ArrangeWithSpareSlot(
@@ -636,7 +930,9 @@ internal static class Program
             if (!folderView.TryGetItemPosition(pidls[i], out actual[i]))
                 throw new InvalidOperationException("无法核对第 " + (i + 1) + " 个桌面图标的位置。");
 
-        ShellPoint empty = FindEmptyGridPoint(actual, rows, columns, spacingX, spacingY);
+        int originX = expected.Length > 0 ? expected[0].X : 10;
+        int originY = expected.Length > 0 ? expected[0].Y : 10;
+        ShellPoint empty = FindEmptyGridPoint(actual, rows, columns, spacingX, spacingY, originX, originY);
         for (int desiredIndex = 0; desiredIndex < pidls.Length; desiredIndex++)
         {
             if (IsNear(actual[desiredIndex], expected[desiredIndex], spacingX, spacingY)) continue;
@@ -656,13 +952,15 @@ internal static class Program
         int rows,
         int columns,
         int spacingX,
-        int spacingY)
+        int spacingY,
+        int originX,
+        int originY)
     {
         for (int column = columns - 1; column >= 0; column--)
         {
             for (int row = rows - 1; row >= 0; row--)
             {
-                var candidate = new ShellPoint { X = 10 + column * spacingX, Y = 10 + row * spacingY };
+                var candidate = new ShellPoint { X = originX + column * spacingX, Y = originY + row * spacingY };
                 if (FindOccupant(actual, candidate, -1, spacingX, spacingY) < 0) return candidate;
             }
         }
@@ -722,6 +1020,621 @@ internal static class Program
                 mismatches++;
         }
         return mismatches;
+    }
+
+    private sealed class OrganizerForm : Form
+    {
+        private const int WindowLogicalWidth = 632;
+        [StructLayout(LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+        private sealed class NativeFontDescription
+        {
+            public int Height, Width, Escapement, Orientation, Weight;
+            public byte Italic, Underline, StrikeOut, CharSet, OutPrecision, ClipPrecision, Quality, PitchAndFamily;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string FaceName;
+        }
+
+        private readonly Color primary = Color.FromArgb(91, 108, 255);
+        private readonly Panel titleBar = new Panel();
+        private readonly Panel header = new Panel();
+        private readonly Label appTitle = new Label();
+        private readonly Label appSubtitle = new Label();
+        private readonly Label statusEyebrow = new Label();
+        private readonly Label statusTitle = new Label();
+        private readonly Label statusBody = new Label();
+        private readonly Label statusMeta = new Label();
+        private readonly Label detailLabel = new Label();
+        private readonly Panel statsPanel = new Panel();
+        private readonly Label[] statValues = new Label[4];
+        private readonly Label[] statLabels = new Label[4];
+        private readonly AccentButton organizeButton;
+        private readonly AccentButton undoButton;
+        private readonly AccentButton previewButton;
+        private readonly AccentButton diagnoseButton;
+        private readonly AccentButton openBackupButton;
+        private readonly Panel advancedPanel = new Panel();
+        private readonly DisclosureButton advancedToggle;
+        private readonly RoundedPanel statusCard;
+        private readonly PictureBox iconBox;
+        private readonly Button minimizeButton;
+        private readonly Button closeButton;
+        private readonly System.Windows.Forms.Timer motionTimer = new System.Windows.Forms.Timer();
+        private int advancedFromHeight, advancedToHeight, advancedStarted;
+        private int motionDeadline;
+        private int statusTitleRestingTop;
+        private bool advancedExpanded, advancedAnimating;
+        private bool layingOut;
+        private float successMotion = 1F;
+        private int previewTarget;
+        private int activeStatCount;
+        private bool busy;
+
+        public OrganizerForm()
+        {
+            Text = "一键整理桌面";
+            BackColor = Color.FromArgb(246, 248, 252);
+            ClientSize = new Size(WindowLogicalWidth, 560);
+            StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.None;
+            MaximizeBox = false;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Regular, GraphicsUnit.Point);
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+            titleBar.BackColor = Color.FromArgb(249, 250, 253);
+            var titleIcon = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom };
+            try { titleIcon.Image = Icon.ToBitmap(); } catch { }
+            titleBar.Controls.Add(titleIcon);
+            var windowTitle = new Label { Text = "一键整理桌面", ForeColor = Color.FromArgb(54, 60, 76), Font = new Font("Microsoft YaHei UI", 9.5F), AutoSize = false };
+            titleBar.Controls.Add(windowTitle);
+            minimizeButton = MakeTitleButton("—", false); minimizeButton.Click += delegate { WindowState = FormWindowState.Minimized; };
+            closeButton = MakeTitleButton("×", true); closeButton.Click += delegate { Close(); };
+            titleBar.Controls.Add(minimizeButton); titleBar.Controls.Add(closeButton);
+            titleBar.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0x00A1, (IntPtr)2, IntPtr.Zero); } };
+            Controls.Add(titleBar);
+
+            header.BackColor = BackColor;
+            iconBox = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom };
+            try { iconBox.Image = Icon.ToBitmap(); } catch { }
+            header.Controls.Add(iconBox);
+            appTitle.Text = "一键整理桌面"; appTitle.AutoSize = false;
+            appTitle.Font = CreateWeightedFont("Microsoft YaHei UI", 16.25F, 600); appTitle.ForeColor = Color.FromArgb(31, 36, 50);
+            header.Controls.Add(appTitle);
+            appSubtitle.Text = "按固定规则整理桌面图标，不移动真实文件"; appSubtitle.AutoSize = false;
+            appSubtitle.Font = new Font("Microsoft YaHei UI", 10.5F); appSubtitle.ForeColor = Color.FromArgb(82, 92, 116);
+            header.Controls.Add(appSubtitle);
+            header.MouseMove += delegate(object sender, MouseEventArgs e) { iconBox.Left = Math.Max(U(0), Math.Min(U(2), (e.X - header.Width / 2) / Math.Max(1, U(120)))) + U(1); };
+            header.MouseLeave += delegate { iconBox.Left = 0; };
+            Controls.Add(header);
+
+            organizeButton = new AccentButton(primary, true) {
+                Text = "开始整理", Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Regular), TabIndex = 0
+            };
+            organizeButton.Click += delegate { RunOperation("organize"); };
+            Controls.Add(organizeButton);
+
+            undoButton = new AccentButton(primary, false) {
+                Text = "撤销上次整理", Font = new Font("Microsoft YaHei UI", 10F), TabIndex = 1, IconKind = 1
+            };
+            undoButton.Click += delegate { RunOperation("undo"); };
+            Controls.Add(undoButton);
+            previewButton = new AccentButton(primary, false) {
+                Text = "预览整理", Font = new Font("Microsoft YaHei UI", 10F), TabIndex = 2, IconKind = 2
+            };
+            previewButton.Click += delegate { RunOperation("preview"); };
+            Controls.Add(previewButton);
+
+            statusCard = new RoundedPanel { BackColor = Color.White, BorderColor = Color.FromArgb(229, 233, 242) };
+            statusEyebrow.AutoSize = false; statusEyebrow.Font = new Font("Microsoft YaHei UI", 9F);
+            statusEyebrow.ForeColor = Color.FromArgb(111, 119, 138); statusCard.Controls.Add(statusEyebrow);
+            statusTitle.AutoSize = false; statusTitle.Font = new Font("Microsoft YaHei UI", 14.5F, FontStyle.Bold);
+            statusTitle.ForeColor = Color.FromArgb(38, 44, 60); statusCard.Controls.Add(statusTitle);
+            statusBody.AutoSize = false; statusBody.Font = new Font("Microsoft YaHei UI", 10.5F);
+            statusBody.ForeColor = Color.FromArgb(83, 91, 110); statusCard.Controls.Add(statusBody);
+            statsPanel.BackColor = Color.White;
+            for (int i = 0; i < statValues.Length; i++)
+            {
+                statValues[i] = new Label { AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold), ForeColor = Color.FromArgb(55, 64, 92) };
+                statLabels[i] = new Label { AutoSize = false, TextAlign = ContentAlignment.TopCenter, Font = new Font("Microsoft YaHei UI", 9F), ForeColor = Color.FromArgb(111, 119, 138) };
+                statsPanel.Controls.Add(statValues[i]); statsPanel.Controls.Add(statLabels[i]);
+            }
+            statusCard.Controls.Add(statsPanel);
+            statusMeta.AutoSize = false; statusMeta.Font = new Font("Microsoft YaHei UI", 9.5F);
+            statusMeta.ForeColor = Color.FromArgb(101, 110, 130); statusCard.Controls.Add(statusMeta);
+            detailLabel.AutoSize = false; detailLabel.AutoEllipsis = false; detailLabel.Font = new Font("Microsoft YaHei UI", 9.5F);
+            detailLabel.ForeColor = Color.FromArgb(86, 126, 102); statusCard.Controls.Add(detailLabel);
+            Controls.Add(statusCard);
+
+            advancedToggle = new DisclosureButton { Text = "高级选项", TabIndex = 3 };
+            advancedToggle.Click += delegate { ToggleAdvanced(); };
+            Controls.Add(advancedToggle);
+
+            advancedPanel.BackColor = BackColor; advancedPanel.Visible = false;
+            diagnoseButton = new AccentButton(primary, false) { Text = "导出诊断信息", Font = new Font("Microsoft YaHei UI", 9.5F), TabIndex = 4 };
+            diagnoseButton.Click += delegate { RunOperation("diagnose"); };
+            advancedPanel.Controls.Add(diagnoseButton);
+            openBackupButton = new AccentButton(primary, false) { Text = "打开布局备份目录", Font = new Font("Microsoft YaHei UI", 9.5F), TabIndex = 5 };
+            openBackupButton.Click += delegate {
+                try { Directory.CreateDirectory(DataDirectory); Process.Start("explorer.exe", DataDirectory); }
+                catch (Exception ex) { ShowError(ex.Message); }
+            };
+            advancedPanel.Controls.Add(openBackupButton);
+            Controls.Add(advancedPanel);
+
+            AcceptButton = organizeButton;
+            motionTimer.Interval = 16; motionTimer.Tick += MotionTick;
+            organizeButton.MotionRequested = undoButton.MotionRequested = previewButton.MotionRequested = diagnoseButton.MotionRequested = openBackupButton.MotionRequested = statusCard.MotionRequested = advancedToggle.MotionRequested = EnsureMotion;
+            SetReady();
+            Shown += delegate {
+                try { int preference = 2; DwmSetWindowAttribute(Handle, 33, ref preference, sizeof(int)); } catch { }
+                ReflowAll();
+            };
+        }
+
+        private int U(int logical)
+        {
+            return Math.Max(logical == 0 ? 0 : 1, (int)Math.Round(logical * DeviceDpi / 96F));
+        }
+
+        private static Font CreateWeightedFont(string family, float size, int weight)
+        {
+            using (var source = new Font(family, size, FontStyle.Regular, GraphicsUnit.Point))
+            {
+                try
+                {
+                    var description = new NativeFontDescription();
+                    source.ToLogFont(description);
+                    description.Weight = weight;
+                    return Font.FromLogFont(description);
+                }
+                catch { return new Font(family, size, FontStyle.Regular, GraphicsUnit.Point); }
+            }
+        }
+
+        private Button MakeTitleButton(string text, bool close)
+        {
+            var button = new Button { Text = text, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(249, 250, 253), ForeColor = Color.FromArgb(65, 70, 84), Font = new Font("Segoe UI", 12F), TabStop = false };
+            button.FlatAppearance.BorderSize = 0; button.FlatAppearance.MouseOverBackColor = close ? Color.FromArgb(224, 76, 86) : Color.FromArgb(235, 237, 243); button.FlatAppearance.MouseDownBackColor = close ? Color.FromArgb(199, 57, 67) : Color.FromArgb(224, 227, 234);
+            if (close) button.MouseEnter += delegate { button.ForeColor = Color.White; };
+            button.MouseLeave += delegate { button.ForeColor = Color.FromArgb(65, 70, 84); };
+            return button;
+        }
+
+        private int MeasureLabel(Label label, int width)
+        {
+            if (String.IsNullOrWhiteSpace(label.Text)) return 0;
+            Size measured = TextRenderer.MeasureText(label.Text, label.Font, new Size(Math.Max(1, width), Int32.MaxValue),
+                TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
+            return measured.Height + U(2);
+        }
+
+        private void PlaceLabel(Label label, int left, ref int y, int width, int gapAfter)
+        {
+            if (String.IsNullOrWhiteSpace(label.Text)) { label.Visible = false; return; }
+            label.Visible = true;
+            int height = MeasureLabel(label, width);
+            label.SetBounds(left, y, width, height);
+            y += height + gapAfter;
+        }
+
+        private void ConfigureStats(string[] labels, string[] values)
+        {
+            activeStatCount = labels == null ? 0 : Math.Min(4, labels.Length);
+            for (int i = 0; i < statValues.Length; i++)
+            {
+                bool visible = i < activeStatCount;
+                statValues[i].Visible = statLabels[i].Visible = visible;
+                statValues[i].Text = visible && values != null && i < values.Length ? values[i] : "";
+                statLabels[i].Text = visible ? labels[i] : "";
+            }
+            statsPanel.Visible = activeStatCount > 0;
+        }
+
+        private void LayoutStats(int width)
+        {
+            if (activeStatCount == 0) return;
+            int slot = width / activeStatCount;
+            int valueHeight = U(30);
+            int labelTop = valueHeight + U(2);
+            int labelHeight = U(24);
+            for (int i = 0; i < activeStatCount; i++)
+            {
+                int left = i * slot;
+                int currentWidth = i == activeStatCount - 1 ? width - left : slot;
+                statValues[i].SetBounds(left, 0, currentWidth, valueHeight);
+                statLabels[i].SetBounds(left, labelTop, currentWidth, labelHeight);
+            }
+            statsPanel.Size = new Size(width, labelTop + labelHeight);
+        }
+
+        private void LayoutStatusCard()
+        {
+            int paddingX = U(26);
+            int paddingTop = U(22);
+            int contentWidth = statusCard.ClientSize.Width - paddingX * 2;
+            int y = paddingTop;
+            PlaceLabel(statusEyebrow, paddingX, ref y, contentWidth, U(6));
+            statusTitleRestingTop = y;
+            PlaceLabel(statusTitle, paddingX, ref y, contentWidth, U(10));
+            PlaceLabel(statusBody, paddingX, ref y, contentWidth, U(14));
+            if (activeStatCount > 0)
+            {
+                LayoutStats(contentWidth);
+                statsPanel.Location = new Point(paddingX, y);
+                y += statsPanel.Height + U(14);
+            }
+            PlaceLabel(statusMeta, paddingX, ref y, contentWidth, U(14));
+            PlaceLabel(detailLabel, paddingX, ref y, contentWidth, 0);
+            statusCard.Height = y + U(22);
+        }
+
+        private void ReflowAll()
+        {
+            if (layingOut) return;
+            layingOut = true;
+            try
+            {
+                int width = U(WindowLogicalWidth);
+                int outer = U(36);
+                int contentWidth = width - outer * 2;
+                ClientSize = new Size(width, ClientSize.Height);
+                titleBar.SetBounds(0, 0, width, U(44));
+                Control titleIcon = titleBar.Controls[0];
+                titleIcon.SetBounds(U(15), U(10), U(24), U(24));
+                titleBar.Controls[1].SetBounds(U(47), U(10), U(210), U(24));
+                minimizeButton.SetBounds(width - U(88), 0, U(44), U(44));
+                closeButton.SetBounds(width - U(44), 0, U(44), U(44));
+
+                int headerTextLeft = U(66);
+                int headerTextWidth = contentWidth - headerTextLeft;
+                int titleHeight = MeasureLabel(appTitle, headerTextWidth);
+                int subtitleHeight = MeasureLabel(appSubtitle, headerTextWidth);
+                int titleSubtitleGap = U(6);
+                int textGroupHeight = titleHeight + titleSubtitleGap + subtitleHeight;
+                int logoSize = U(46);
+                int headerHeight = Math.Max(logoSize, textGroupHeight);
+                header.SetBounds(outer, U(61), contentWidth, headerHeight);
+                int textTop = Math.Max(0, (headerHeight - textGroupHeight) / 2);
+                iconBox.SetBounds(0, Math.Max(0, (headerHeight - logoSize) / 2), logoSize, logoSize);
+                appTitle.SetBounds(headerTextLeft, textTop, headerTextWidth, titleHeight);
+                appSubtitle.SetBounds(headerTextLeft, textTop + titleHeight + titleSubtitleGap, headerTextWidth, subtitleHeight);
+
+                organizeButton.SetBounds(outer, header.Bottom + U(16), contentWidth, U(56));
+                int secondaryGap = U(16);
+                int secondaryWidth = (contentWidth - secondaryGap) / 2;
+                int secondaryTop = organizeButton.Bottom + U(16);
+                undoButton.SetBounds(outer, secondaryTop, secondaryWidth, U(46));
+                previewButton.SetBounds(outer + secondaryWidth + secondaryGap, secondaryTop, contentWidth - secondaryWidth - secondaryGap, U(46));
+
+                statusCard.SetBounds(outer, undoButton.Bottom + U(20), contentWidth, Math.Max(statusCard.Height, U(180)));
+                LayoutStatusCard();
+                advancedToggle.SetBounds(outer, statusCard.Bottom + U(12), U(154), U(32));
+                advancedPanel.SetBounds(outer, advancedToggle.Bottom + U(8), contentWidth, U(46));
+                int advancedGap = U(16);
+                int advancedButtonWidth = (contentWidth - advancedGap) / 2;
+                diagnoseButton.SetBounds(0, 0, advancedButtonWidth, U(44));
+                openBackupButton.SetBounds(advancedButtonWidth + advancedGap, 0, contentWidth - advancedButtonWidth - advancedGap, U(44));
+                if (!advancedAnimating) ClientSize = new Size(width, DesiredWindowHeight(advancedExpanded));
+            }
+            finally { layingOut = false; }
+        }
+
+        private int DesiredWindowHeight(bool expanded)
+        {
+            return (expanded ? advancedPanel.Bottom : advancedToggle.Bottom) + U(20);
+        }
+
+        private void ApplyStatus(string eyebrow, string title, string body, string meta, string detail, Color titleColor, Color detailColor, string[] labels, string[] values)
+        {
+            statusEyebrow.Text = eyebrow;
+            statusTitle.Text = title;
+            statusBody.Text = body ?? "";
+            statusMeta.Text = meta ?? "";
+            detailLabel.Text = detail ?? "";
+            statusTitle.ForeColor = titleColor;
+            detailLabel.ForeColor = detailColor;
+            ConfigureStats(labels, values);
+            ReflowAll();
+        }
+
+        private void ToggleAdvanced()
+        {
+            if (advancedAnimating) return;
+            advancedExpanded = !advancedExpanded;
+            advancedToggle.Expanded = advancedExpanded;
+            advancedFromHeight = ClientSize.Height;
+            advancedToHeight = DesiredWindowHeight(advancedExpanded);
+            advancedStarted = Environment.TickCount; advancedAnimating = true;
+            EnsureMotion();
+            if (advancedExpanded) advancedPanel.Visible = true;
+        }
+
+        private void MotionTick(object sender, EventArgs e)
+        {
+            organizeButton.Advance(); undoButton.Advance(); previewButton.Advance(); diagnoseButton.Advance(); openBackupButton.Advance(); statusCard.Advance(); advancedToggle.Advance();
+            if (successMotion < 1F)
+            {
+                successMotion = Math.Min(1F, successMotion + .055F);
+                statusTitle.Top = statusTitleRestingTop + (int)((1F - successMotion) * U(4));
+                if (previewTarget > 0) statusTitle.Text = "预计整理 " + (int)(previewTarget * (1F - (float)Math.Pow(1F-successMotion, 3))) + " 个图标";
+                statusTitle.Invalidate();
+            }
+            if (advancedAnimating)
+            {
+                float t = Math.Min(1F, (Environment.TickCount - advancedStarted) / 220F);
+                float eased = 1F - (float)Math.Pow(1F - t, 3);
+                ClientSize = new Size(U(WindowLogicalWidth), advancedFromHeight + (int)((advancedToHeight - advancedFromHeight) * eased));
+                if (t >= 1F) { advancedAnimating = false; if (!advancedExpanded) advancedPanel.Visible = false; }
+            }
+            if (!advancedAnimating && successMotion >= 1F && (Environment.TickCount >= motionDeadline || (!organizeButton.NeedsAnimation && !undoButton.NeedsAnimation && !previewButton.NeedsAnimation && !diagnoseButton.NeedsAnimation && !openBackupButton.NeedsAnimation && !statusCard.NeedsAnimation && !advancedToggle.NeedsAnimation)))
+                motionTimer.Stop();
+        }
+
+        private void EnsureMotion() { motionDeadline = Environment.TickCount + 650; if (!motionTimer.Enabled) motionTimer.Start(); }
+
+        private void SetReady()
+        {
+            previewTarget = 0; successMotion = 1F;
+            ApplyStatus("当前状态", "准备就绪", "点击开始后，将按固定规则整理桌面图标。",
+                "排列方式    从上到下，再从左到右\n保留区域    右侧 1/3",
+                "✓ 不会移动、删除或重命名任何桌面文件", Color.FromArgb(38, 44, 60), Color.FromArgb(86, 126, 102), null, null);
+        }
+
+        private void RunOperation(string kind)
+        {
+            if (busy) return;
+            busy = true;
+            SetButtons(false);
+            previewTarget = 0; successMotion = 1F;
+            string title = kind == "organize" ? "正在整理…" : kind == "undo" ? "正在恢复…" : kind == "preview" ? "正在预览…" : "正在生成诊断…";
+            string body = kind == "organize" ? "正在读取桌面图标并计算安全位置…" : "正在读取当前桌面布局…";
+            ApplyStatus("正在处理", title, body, "请稍候，窗口会在操作完成后自动更新。", "", primary, Color.FromArgb(86, 126, 102), null, null);
+            var thread = new Thread(delegate()
+            {
+                try
+                {
+                    OperationResult result = null;
+                    string path = null;
+                    if (kind == "organize") result = OrganizeDesktop();
+                    else if (kind == "undo") result = RestoreDesktop();
+                    else if (kind == "preview") result = PreviewDesktop();
+                    else path = ExportDiagnostics();
+                    BeginInvoke((MethodInvoker)delegate { ShowSuccess(kind, result, path); });
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke((MethodInvoker)delegate {
+                        if (kind == "undo" && ex.Message.IndexOf("还没有可撤销", StringComparison.Ordinal) >= 0) ShowNoUndoInfo();
+                        else ShowError(ex.Message);
+                    });
+                }
+            });
+            thread.IsBackground = true;
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+        }
+
+        private void ShowSuccess(string kind, OperationResult result, string path)
+        {
+            busy = false; SetButtons(true);
+            successMotion = 0F; previewTarget = 0;
+            Color success = Color.FromArgb(42, 133, 84);
+            if (kind == "organize")
+            {
+                string meta = result.BackupSaved ? "整理前布局已保存，可随时撤销。" : "未检测到坐标变化，保留了之前的撤销备份。";
+                string detail = String.IsNullOrEmpty(result.Details) ? "✓ 没有移动任何桌面文件" : result.Details;
+                ApplyStatus("整理完成", "桌面已整理好", "", meta, detail, success, Color.FromArgb(86, 126, 102),
+                    new[] { "已整理", "保留未动", "固定项目" }, new[] { result.Arranged.ToString(), result.Protected.ToString(), result.Fixed.ToString() });
+            }
+            else if (kind == "undo")
+            {
+                ApplyStatus("撤销完成", "已恢复上次布局", "", "不存在或无法精确匹配的项目不会被移动。", "新出现的桌面项目保持原位。", success, Color.FromArgb(86, 126, 102),
+                    new[] { "已恢复", "已跳过" }, new[] { result.Restored.ToString(), result.Skipped.ToString() });
+            }
+            else if (kind == "preview")
+            {
+                previewTarget = result.Arranged;
+                ApplyStatus("整理预览", "预计整理 0 个图标", "以下为本次整理统计。", "", "本次预览没有移动任何图标。", success, Color.FromArgb(86, 126, 102),
+                    new[] { "应用程序", "文件夹", "文件", "保留区" }, new[] { result.Applications.ToString(), result.Folders.ToString(), result.Files.ToString(), result.Protected.ToString() });
+            }
+            else
+            {
+                ApplyStatus("诊断完成", "诊断信息已导出", path, "身份仅记录短哈希，不包含完整路径。", "", success, Color.FromArgb(86, 126, 102), null, null);
+            }
+            EnsureMotion();
+        }
+
+        private void ShowNoUndoInfo()
+        {
+            previewTarget = 0; successMotion = 0F;
+            busy = false; SetButtons(true);
+            ApplyStatus("提示", "暂无可撤销的布局", "当前没有可恢复的桌面布局。完成一次有效整理后，即可使用撤销功能。",
+                "桌面当前状态没有发生改变。", "", Color.FromArgb(72, 92, 132), Color.FromArgb(86, 126, 102), null, null);
+            EnsureMotion();
+        }
+
+        private void ShowError(string message)
+        {
+            previewTarget = 0; successMotion = 0F;
+            busy = false; SetButtons(true);
+            Color error = Color.FromArgb(190, 67, 67);
+            ApplyStatus("操作未完成", "无法安全完成操作", message, "桌面真实文件没有被移动、删除或重命名。",
+                "如问题持续，可在高级选项中导出诊断信息。", error, error, null, null);
+            EnsureMotion();
+        }
+
+        private void SetButtons(bool enabled)
+        {
+            organizeButton.Enabled = enabled; undoButton.Enabled = enabled; previewButton.Enabled = enabled; advancedToggle.Enabled = enabled;
+            diagnoseButton.Enabled = enabled; openBackupButton.Enabled = enabled;
+            organizeButton.Text = enabled ? "开始整理" : "正在处理…";
+        }
+    }
+
+    private sealed class DisclosureButton : Button
+    {
+        private bool hovered;
+        private float hoverAmount;
+        public bool Expanded { get; set; }
+        public Action MotionRequested { get; set; }
+        public bool NeedsAnimation { get { return Math.Abs((hovered ? 1F : 0F) - hoverAmount) > .002F; } }
+
+        public DisclosureButton()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = Color.Transparent;
+            ForeColor = Color.FromArgb(76, 86, 112); Font = new Font("Microsoft YaHei UI", 9.5F); Cursor = Cursors.Hand;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hovered = true; if (MotionRequested != null) MotionRequested(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hovered = false; if (MotionRequested != null) MotionRequested(); base.OnMouseLeave(e); }
+        public void Advance()
+        {
+            float target = hovered ? 1F : 0F;
+            float next = hoverAmount + (target - hoverAmount) * .18F;
+            if (Math.Abs(next - hoverAmount) > .002F) { hoverAmount = next; Invalidate(); }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Parent == null ? Color.Transparent : Parent.BackColor);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            Color textColor = Blend(ForeColor, Color.FromArgb(44, 55, 91), hoverAmount);
+            Rectangle textBounds = new Rectangle(0, 0, Width - 24, Height);
+            TextRenderer.DrawText(e.Graphics, Text, Font, textBounds, Enabled ? textColor : Color.FromArgb(145, 150, 163), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            int centerX = Math.Min(Width - 12, TextRenderer.MeasureText(Text, Font, new Size(Int32.MaxValue, Height), TextFormatFlags.NoPadding).Width + 13);
+            int centerY = Height / 2;
+            using (var pen = new Pen(Enabled ? textColor : Color.FromArgb(145, 150, 163), 1.5F))
+            {
+                pen.StartCap = pen.EndCap = LineCap.Round;
+                if (Expanded) { e.Graphics.DrawLine(pen, centerX - 4, centerY + 2, centerX, centerY - 2); e.Graphics.DrawLine(pen, centerX, centerY - 2, centerX + 4, centerY + 2); }
+                else { e.Graphics.DrawLine(pen, centerX - 4, centerY - 2, centerX, centerY + 2); e.Graphics.DrawLine(pen, centerX, centerY + 2, centerX + 4, centerY - 2); }
+            }
+            if (Focused && ShowFocusCues)
+            {
+                using (var pen = new Pen(Color.FromArgb(130, 143, 226))) { pen.DashStyle = DashStyle.Dot; e.Graphics.DrawRectangle(pen, 0, 2, Math.Max(1, centerX + 10), Math.Max(1, Height - 5)); }
+            }
+        }
+    }
+
+    private sealed class RoundedPanel : Panel
+    {
+        public Color BorderColor { get; set; }
+        private bool hovered;
+        private float hoverAmount;
+        public Action MotionRequested { get; set; }
+        public bool NeedsAnimation { get { return Math.Abs((hovered ? 1F : 0F) - hoverAmount) > .002F; } }
+        public RoundedPanel() { SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true); }
+        protected override void OnMouseEnter(EventArgs e) { hovered = true; if (MotionRequested != null) MotionRequested(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hovered = false; if (MotionRequested != null) MotionRequested(); base.OnMouseLeave(e); }
+        public void Advance() { float target = hovered ? 1F : 0F; float next = hoverAmount + (target - hoverAmount) * .18F; if (Math.Abs(next - hoverAmount) > .002F) { hoverAmount = next; Invalidate(); } }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath path = RoundPath(new Rectangle(0, 0, Width - 1, Height - 1), 14))
+            using (var pen = new Pen(Blend(BorderColor, Color.FromArgb(171, 181, 245), hoverAmount))) e.Graphics.DrawPath(pen, path);
+        }
+    }
+
+    private sealed class AccentButton : Button
+    {
+        private readonly Color accent;
+        private readonly bool filled;
+        private bool hovered;
+        private bool pressed;
+        private float hoverAmount, pressAmount;
+        private Point targetGlow, currentGlow;
+        public int IconKind { get; set; }
+        public Action MotionRequested { get; set; }
+        public bool NeedsAnimation { get { return Math.Abs((hovered?1F:0F)-hoverAmount)>.002F || Math.Abs((pressed?1F:0F)-pressAmount)>.002F || currentGlow != targetGlow; } }
+        public AccentButton(Color accent, bool filled)
+        {
+            this.accent = accent; this.filled = filled;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; Cursor = Cursors.Hand;
+            ForeColor = filled ? Color.White : Color.FromArgb(72, 78, 132); BackColor = Color.Transparent; UseVisualStyleBackColor = false;
+        }
+        protected override void OnMouseEnter(EventArgs e) { hovered = true; if (MotionRequested != null) MotionRequested(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hovered = false; pressed = false; if (MotionRequested != null) MotionRequested(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { pressed = true; if (MotionRequested != null) MotionRequested(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { pressed = false; if (MotionRequested != null) MotionRequested(); base.OnMouseUp(e); }
+        protected override void OnMouseMove(MouseEventArgs e) { targetGlow = e.Location; if (MotionRequested != null) MotionRequested(); base.OnMouseMove(e); }
+        protected override void OnResize(EventArgs e) { base.OnResize(e); Region = new Region(RoundPath(new Rectangle(0, 0, Width, Height), 12)); }
+        public void Advance()
+        {
+            float h = hovered ? 1F : 0F, p = pressed ? 1F : 0F;
+            float nh = hoverAmount + (h - hoverAmount) * .18F, np = pressAmount + (p - pressAmount) * .3F;
+            int dx = targetGlow.X - currentGlow.X, dy = targetGlow.Y - currentGlow.Y;
+            Point nextGlow = new Point(Math.Abs(dx) <= 5 ? targetGlow.X : currentGlow.X + (int)(dx * .18F), Math.Abs(dy) <= 5 ? targetGlow.Y : currentGlow.Y + (int)(dy * .18F));
+            bool changed = Math.Abs(nh-hoverAmount)>.002F || Math.Abs(np-pressAmount)>.002F || nextGlow != currentGlow;
+            currentGlow = nextGlow;
+            if (changed) { hoverAmount=nh; pressAmount=np; Invalidate(); }
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Parent == null ? Color.Transparent : Parent.BackColor);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            int offset = pressAmount > .45F ? 1 : 0;
+            Rectangle bounds = new Rectangle(0, offset, Width - 1, Height - 1 - offset);
+            Color baseColor = !Enabled ? Color.FromArgb(188, 193, 207) : Blend(accent, Color.FromArgb(102, 98, 235), hoverAmount * .45F);
+            using (GraphicsPath path = RoundPath(bounds, 12))
+            {
+                if (filled)
+                {
+                    using (var brush = new LinearGradientBrush(bounds, baseColor, Color.FromArgb(baseColor.A, Math.Max(0, baseColor.R - 18), Math.Max(0, baseColor.G - 10), baseColor.B), 0F))
+                        e.Graphics.FillPath(brush, path);
+                    if (hoverAmount > .01F)
+                    {
+                        Rectangle glow = new Rectangle(currentGlow.X - 115, currentGlow.Y - 55, 230, 110);
+                        using (GraphicsPath ellipse = new GraphicsPath())
+                        { ellipse.AddEllipse(glow); using (var light = new PathGradientBrush(ellipse)) { light.CenterColor = Color.FromArgb((int)(32 * hoverAmount), Color.White); light.SurroundColors = new[] { Color.FromArgb(0, Color.White) }; e.Graphics.SetClip(path); e.Graphics.FillEllipse(light, glow); e.Graphics.ResetClip(); } }
+                    }
+                }
+                else
+                {
+                    using (var brush = new SolidBrush(hovered ? Color.FromArgb(245, 246, 255) : Color.White)) e.Graphics.FillPath(brush, path);
+                    using (var pen = new Pen(Enabled ? Color.FromArgb(210, 215, 235) : Color.FromArgb(225, 227, 233))) e.Graphics.DrawPath(pen, path);
+                }
+                Rectangle textBounds = bounds;
+                if (IconKind > 0) { DrawSmallIcon(e.Graphics, IconKind, new Point(Width / 2 - 60, Height / 2)); textBounds.X += 13; }
+                TextRenderer.DrawText(e.Graphics, Text, Font, textBounds, Enabled ? ForeColor : Color.FromArgb(145, 150, 163),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+                if (Focused && ShowFocusCues)
+                {
+                    Rectangle focus = Rectangle.Inflate(bounds, -5, -5);
+                    using (var focusPen = new Pen(Color.FromArgb(125, 132, 238))) using (GraphicsPath focusPath = RoundPath(focus, 8)) { focusPen.Width = 1.5F; e.Graphics.DrawPath(focusPen, focusPath); }
+                }
+            }
+        }
+        private void DrawSmallIcon(Graphics g, int kind, Point center)
+        {
+            using (var pen = new Pen(Enabled ? ForeColor : Color.Gray, 1.5F))
+            {
+                pen.StartCap = pen.EndCap = LineCap.Round;
+                if (kind == 1) { g.DrawArc(pen, center.X-6, center.Y-6, 12, 12, 35, 285); g.DrawLine(pen, center.X-7, center.Y-5, center.X-2, center.Y-6); }
+                else { g.DrawEllipse(pen, center.X-7, center.Y-4, 14, 8); using (var dot = new SolidBrush(Enabled ? ForeColor : Color.Gray)) g.FillEllipse(dot, center.X-2, center.Y-2, 4, 4); }
+            }
+        }
+    }
+
+    private static Color Blend(Color a, Color b, float amount)
+    {
+        amount = Math.Max(0F, Math.Min(1F, amount));
+        return Color.FromArgb((int)(a.A + (b.A-a.A)*amount), (int)(a.R+(b.R-a.R)*amount), (int)(a.G+(b.G-a.G)*amount), (int)(a.B+(b.B-a.B)*amount));
+    }
+
+    private static GraphicsPath RoundPath(Rectangle rectangle, int radius)
+    {
+        int diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(rectangle.Left, rectangle.Top, diameter, diameter, 180, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Top, diameter, diameter, 270, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(rectangle.Left, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     private sealed class ChineseNameComparer : IComparer<string>
@@ -794,6 +1707,20 @@ internal static class Program
             ThrowIfFailed(view.Item(index, out pidl), "无法定位第 " + (index + 1) + " 个桌面图标。");
             if (pidl == IntPtr.Zero) throw new InvalidOperationException("桌面图标标识为空。");
             return pidl;
+        }
+
+        public int GetItemCount()
+        {
+            int count;
+            ThrowIfFailed(view.ItemCount(2, out count), "无法读取桌面图标数量。"); // SVGIO_ALLVIEW
+            return count;
+        }
+
+        public ShellPoint GetSpacing()
+        {
+            var spacing = new ShellPoint();
+            ThrowIfFailed(view.GetSpacing(ref spacing), "无法读取桌面图标间距。");
+            return spacing;
         }
 
         public bool TryGetItemPosition(int index, out ShellPoint point)
