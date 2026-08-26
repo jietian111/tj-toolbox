@@ -7,6 +7,7 @@
 | 工具 | 用途 | 最短用法 |
 | --- | --- | --- |
 | [`organize-obsidian-inbox`](skills/organize-obsidian-inbox/) | 把当前对话、附件、网页和收件箱资料整理成 Obsidian 笔记 | 附上资料或讨论完成后说 `存入 Obsidian` |
+| [`image-prompt-manager`](skills/image-prompt-manager/) | 维护个人图片处理方案库，按当前图片推荐、执行并记录版本、结果和反馈 | 附图后说 `处理一下这个图片` |
 | [`project-handoff`](skills/project-handoff/) | 生成或更新 `HANDOFF.md`，让新任务在没有旧聊天记录时继续长期项目 | `使用 project-handoff，生成 HANDOFF.md` |
 | [`codex-proxy-launcher`](skills/codex-proxy-launcher/) | 为 Windows 生成强制使用本地 HTTP 代理、可适配 App 更新的 Codex 桌面快捷方式 | `使用 codex-proxy-launcher，帮我生成代理启动器` |
 | [一键整理桌面](#windows-工具一键整理桌面) | 按类型重新排列 Windows 桌面图标，不移动或删除文件 | 从 [Releases](https://github.com/jietian111/tj-toolbox/releases) 下载运行 |
@@ -85,6 +86,28 @@ dist\DesktopOrganizer.exe
 ```powershell
 .\build.ps1 -OutputDirectory 'D:\BuildOutput'
 ```
+
+### Codex Skill：image-prompt-manager
+
+[`image-prompt-manager`](skills/image-prompt-manager/) 使用本地 SQLite 保存个人图片处理 Prompt、不可变版本、实际执行 Run、结果引用和反馈。附图后说“处理一下这个图片”，Skill 会先分析当前图片并展示带编号的个人库候选或临时方案；只有用户选定后才调用图片工具和记录使用，浏览与推荐本身不会增加使用次数。
+
+#### 安装
+
+把下面整段内容发送给 Codex，即可使用官方 `skill-installer` 安装并验证：
+
+```text
+请使用 skill-installer，把下面 GitHub 目录中的 image-prompt-manager Skill 安装到我的 Codex 默认 Skills 目录，并在安装后验证 SKILL.md、agents/openai.yaml、references、scripts 和 tests。如果目标目录已经存在，请先检查并告诉我，不要直接覆盖。请直接执行安装，不要只提供操作步骤：
+
+https://github.com/jietian111/tj-toolbox/tree/main/skills/image-prompt-manager
+```
+
+安装完成后打开一个新的 Codex 任务，附上一张图片并发送：
+
+```text
+处理一下这个图片
+```
+
+Skill 的源码和可安装内容位于仓库；变化中的个人数据库保存在用户主目录的 `.image-prompt-manager` 中，不会写入 Skill 目录或提交到 GitHub。所有确定性读写均通过 `scripts/library.py` 完成，不需要云端数据库。
 
 ### Codex Skill：codex-proxy-launcher
 
@@ -229,6 +252,12 @@ tj-toolbox/
 │  │  ├─ assets/                   # CMD 模板和动态 App 入口解析器
 │  │  ├─ scripts/                  # 桌面启动器安装脚本
 │  │  └─ SKILL.md                  # 代理端口收集、生成与验收流程
+│  ├─ image-prompt-manager/
+│  │  ├─ agents/openai.yaml        # Codex 界面元数据
+│  │  ├─ references/               # 推荐、版本、Run 与数据库规则
+│  │  ├─ scripts/                  # SQLite Prompt 库 CLI
+│  │  ├─ tests/                    # V2 回归与 V3 测试
+│  │  └─ SKILL.md                  # 自然语言触发与先推荐后执行流程
 │  ├─ project-handoff/
 │  │  ├─ agents/openai.yaml        # Codex 界面元数据
 │  │  └─ SKILL.md                  # Skill 触发条件与工作流程

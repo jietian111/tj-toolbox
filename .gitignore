@@ -7,3 +7,11 @@ dist/
 # Diagnostic and editor files
 desktop-organizer-diagnostic.txt
 .vs/
+
+# Python caches and local Skill data
+__pycache__/
+*.py[cod]
+*.db
+*.db-wal
+*.db-shm
+.pytest_cache/

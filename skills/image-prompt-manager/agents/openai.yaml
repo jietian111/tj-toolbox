@@ -1,0 +1,4 @@
+interface:
+  display_name: "Image Prompt Manager"
+  short_description: "按历史效果推荐、执行并持续记录个人图片处理方案"
+  default_prompt: "请用 $image-prompt-manager 看看这张照片适合怎么处理，并优先参考我以前效果好的方案。"
