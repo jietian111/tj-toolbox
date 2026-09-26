@@ -161,14 +161,17 @@ Skill 默认生成：
 ```text
 桌面\Codex Proxy Launcher\CodexProxyLauncher.cmd
 桌面\Codex Proxy Launcher\Resolve-CodexApp.ps1
+桌面\Codex Proxy Launcher\Activate-CodexApp.ps1
 桌面\Codex.lnk
 ```
 
-启动器会设置 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`，并向 Codex/ChatGPT App 传入 Chromium 的 `--proxy-server` 参数。它还会从 AppX 包及 `AppxManifest.xml` 动态识别当前入口，兼容 `ChatGPT.exe` 和 `Codex.exe`；App 更新后再次启动时，会重新解析程序路径并刷新快捷方式图标。
+启动器会设置 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`，并向 Codex/ChatGPT App 传入 Chromium 的 `--proxy-server` 参数。它还会从 AppX 包及 `AppxManifest.xml` 动态识别当前入口，兼容 `ChatGPT.exe` 和 `Codex.exe`；App 更新后再次启动时，会重新解析程序路径并刷新快捷方式图标。启动 App 时使用 Windows 注册的程序包身份，避免直接运行 WindowsApps 中的 EXE 导致“该进程没有程序包标识符”。
 
 启动器同时保留 Codex 子进程常用的 Git、Node.js、npm 和 ripgrep 路径修复，并提供 `--check` 和 `--env-check` 两个检查入口。前者显示代理端口状态、当前 App 路径、代理地址和快捷方式位置；后者额外显示这些命令行工具的实际路径及版本。
 
 代理端口关闭时仍可生成启动器，但使用前需要先启动本地代理软件。本 Skill 当前面向 Windows 10/11，不负责安装或配置代理软件，也不会修改系统级代理。修复时只覆盖它自己生成的启动器文件和 `Codex.lnk`，不会删除其他桌面内容。
+
+如果 ChatGPT/Codex 已在运行，新启动请求可能只会唤起现有窗口；要让新代理参数在主进程生效，需要先正常退出 App，再从生成的快捷方式重新打开。
 
 ### Codex Skill：project-handoff
 
@@ -274,7 +277,7 @@ tj-toolbox/
 ├─ skills/
 │  ├─ codex-proxy-launcher/
 │  │  ├─ agents/openai.yaml        # Codex 界面元数据
-│  │  ├─ assets/                   # CMD 模板和动态 App 入口解析器
+│  │  ├─ assets/                   # CMD 模板、入口解析器与包激活脚本
 │  │  ├─ scripts/                  # 桌面启动器安装脚本
 │  │  └─ SKILL.md                  # 代理端口收集、生成与验收流程
 │  ├─ image-prompt-manager/

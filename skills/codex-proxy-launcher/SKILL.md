@@ -23,7 +23,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill-dir>\scripts\install
 
 The installer creates a self-contained launcher folder on the desktop and `Codex.lnk`. It may replace its own prior launcher files and shortcut when repairing or changing the port. Never remove unrelated desktop files.
 
-Preserve all packaged behavior: standard proxy environment variables, Chromium proxy arguments, dynamic AppX/Manifest entrypoint discovery, `ChatGPT.exe` and `Codex.exe` compatibility, shortcut icon refresh after app updates, child-process tool PATH repair, `--check`, and `--env-check`.
+Preserve all packaged behavior: standard proxy environment variables, Chromium proxy arguments, dynamic AppX/Manifest entrypoint discovery, `ChatGPT.exe` and `Codex.exe` compatibility, shortcut icon refresh after app updates, child-process tool PATH repair, `--check`, and `--env-check`. Launch the app through its registered AppUserModelID via `IApplicationActivationManager`; directly starting the WindowsApps EXE can fail with a missing package identity.
 
 ## Verify
 

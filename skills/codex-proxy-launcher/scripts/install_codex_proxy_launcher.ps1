@@ -35,13 +35,16 @@ if ($shortcutParent) { New-Item -ItemType Directory -Path $shortcutParent -Force
 $skillDirectory = Split-Path $PSScriptRoot -Parent
 $templatePath = Join-Path $skillDirectory 'assets\CodexProxyLauncher.cmd.template'
 $resolverSource = Join-Path $skillDirectory 'assets\Resolve-CodexApp.ps1'
+$activatorSource = Join-Path $skillDirectory 'assets\Activate-CodexApp.ps1'
 $launcherPath = Join-Path $OutputDirectory 'CodexProxyLauncher.cmd'
 $resolverPath = Join-Path $OutputDirectory 'Resolve-CodexApp.ps1'
+$activatorPath = Join-Path $OutputDirectory 'Activate-CodexApp.ps1'
 
 $template = Get-Content -LiteralPath $templatePath -Raw
 $launcher = $template.Replace('__PROXY_PORT__', [string]$ProxyPort).Replace('__SHORTCUT_PATH__', $ShortcutPath)
 Set-Content -LiteralPath $launcherPath -Value $launcher -Encoding ASCII
 Copy-Item -LiteralPath $resolverSource -Destination $resolverPath -Force
+Copy-Item -LiteralPath $activatorSource -Destination $activatorPath -Force
 
 $appPath = & $resolverPath
 $shell = New-Object -ComObject WScript.Shell
@@ -61,8 +64,10 @@ $portState = ($checkOutput | Where-Object { $_ -like 'ProxyPort=*' } | Select-Ob
     AppPath = $appPath
     LauncherPath = $launcherPath
     ResolverPath = $resolverPath
+    ActivatorPath = $activatorPath
     ShortcutPath = $ShortcutPath
     LauncherExists = Test-Path -LiteralPath $launcherPath
     ResolverExists = Test-Path -LiteralPath $resolverPath
+    ActivatorExists = Test-Path -LiteralPath $activatorPath
     ShortcutExists = Test-Path -LiteralPath $ShortcutPath
 }
